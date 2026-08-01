@@ -20,7 +20,7 @@ import {
   type LanguageModeState,
 } from '@/audio/language-mode';
 import { WS_ORIGIN } from '@/shared/config';
-import { fromServerCode, VoxError, type ErrorCode } from '@/shared/errors';
+import { fromServerCode, redact, VoxError, type ErrorCode } from '@/shared/errors';
 import {
   DEFAULT_PREFERENCES,
   type AccountSnapshot,
@@ -196,6 +196,12 @@ async function syncAccount(): Promise<void> {
     preferences: runtime.preferences,
   };
   runtime.meter = applyBalanceUpdate(runtime.meter, profile.balance, Date.now());
+
+  // A successful sync IS a valid session. Leaving the machine in `logged_out` here
+  // would show the account in the panel while refusing to start a session.
+  if (runtime.session.state === 'logged_out' || runtime.session.state === 'authenticating') {
+    dispatch({ type: 'LOGIN_SUCCEEDED' });
+  }
   broadcast();
 }
 
@@ -265,7 +271,9 @@ async function startSession(): Promise<void> {
   // The state machine is the guard against a double start: if it refuses, we stop here
   // and never touch the tab or the socket.
   if (!dispatch({ type: 'START_REQUESTED' }, sessionId)) {
-    runtime.errorCode = 'already_running';
+    // Report WHY it was refused. Reporting `already_running` when the real problem is a
+    // missing session sends the user hunting for a phantom second session.
+    runtime.errorCode = runtime.session.state === 'logged_out' ? 'auth_expired' : 'already_running';
     broadcast();
     return;
   }
@@ -460,83 +468,164 @@ async function renderSubtitle(
   await sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_UPDATE', partial, final, original });
 }
 
+// --- boot ------------------------------------------------------------------
+
+/**
+ * Rehydration promise for a woken service worker.
+ *
+ * MV3 terminates the worker after ~30 s idle and restarts it on the next message. On
+ * restart the module-level `runtime` begins at `logged_out` and is only corrected after
+ * an async storage read — so a command arriving inside that window was silently dropped
+ * by the state machine and surfaced as a misleading `already_running`. Every state-
+ * touching handler awaits this first.
+ */
+const ready: Promise<void> = (async () => {
+  await loadPreferences();
+  const token = await readToken();
+  runtime.session = initialContext(Boolean(token));
+  if (token) {
+    await syncAccount().catch((cause: unknown) => {
+      console.warn('[voxtranslate] initial account sync failed', cause);
+    });
+  }
+})();
+
+// --- command handling ------------------------------------------------------
+
+/** Panel intents. Runs only after `ready`, so it can never see half-woken state. */
+async function handleCommand(request: PanelRequest): Promise<void> {
+  switch (request.kind) {
+    case 'LOGIN':
+      dispatch({ type: 'LOGIN_STARTED' });
+      try {
+        await login(api);
+        dispatch({ type: 'LOGIN_SUCCEEDED' });
+        await syncAccount();
+      } catch (cause) {
+        const code = cause instanceof VoxError ? cause.code : 'auth_failed';
+        console.warn('[voxtranslate] login failed', describe(cause));
+        runtime.errorCode = code;
+        dispatch({ type: 'LOGIN_FAILED', reason: code });
+      }
+      return;
+
+    case 'LOGOUT':
+      await stopSession();
+      await clearSession();
+      runtime.account = null;
+      dispatch({ type: 'LOGGED_OUT' });
+      return;
+
+    case 'REFRESH_ACCOUNT':
+      try {
+        await syncAccount();
+      } catch (cause) {
+        // Log the real cause INCLUDING VoxError.detail: mapping every failure to
+        // `backend_unavailable` without it makes a client-side bug indistinguishable
+        // from an outage.
+        console.warn('[voxtranslate] account sync failed', describe(cause));
+        runtime.errorCode = cause instanceof VoxError ? cause.code : 'backend_unavailable';
+        broadcast();
+      }
+      return;
+
+    case 'START_SESSION':
+      await startSession();
+      return;
+
+    case 'STOP_SESSION':
+      await stopSession();
+      return;
+
+    case 'RESET_USAGE_COUNTER':
+      runtime.meter = resetCounter(runtime.meter);
+      broadcast();
+      return;
+
+    case 'UPDATE_PREFERENCES':
+      await savePreferences(request.patch);
+      return;
+
+    case 'GET_STATE':
+      // Answered directly in the listener so the response channel stays open.
+      return;
+
+    default: {
+      const exhaustive: never = request;
+      return exhaustive;
+    }
+  }
+}
+
+/** Errors reach logs with their detail, and never with a token in them. */
+function describe(cause: unknown): string {
+  if (cause instanceof VoxError) return redact(`${cause.code}: ${cause.detail ?? ''}`);
+  return redact(String(cause));
+}
+
+/** Pipeline events from the offscreen document. Also gated on rehydration. */
+function handleOffscreenEvent(event: OffscreenEvent): void {
+  switch (event.kind) {
+    case 'SOCKET_OPEN':
+      if (runtime.session.sessionId === event.sessionId) dispatch({ type: 'SOCKET_OPEN' });
+      return;
+    case 'SOCKET_CLOSED':
+      if (runtime.session.sessionId === event.sessionId) {
+        dispatch({ type: 'SOCKET_CLOSED', recoverable: false });
+        void stopSession();
+      }
+      return;
+    case 'SERVER_FRAME':
+      handleServerFrame(event.sessionId, event.raw);
+      return;
+    case 'CAPTURE_FAILED':
+      if (runtime.session.sessionId === event.sessionId) {
+        console.warn('[voxtranslate] capture failed', redact(event.reason));
+        fail(event.code as ErrorCode, event.reason);
+        void stopSession();
+      }
+      return;
+    case 'CAPTURE_STARTED':
+      return;
+    case 'TEARDOWN_COMPLETE':
+      dispatch({ type: 'TEARDOWN_COMPLETE' });
+      return;
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
+}
+
+const PANEL_KINDS = new Set<string>([
+  'LOGIN',
+  'LOGOUT',
+  'REFRESH_ACCOUNT',
+  'START_SESSION',
+  'STOP_SESSION',
+  'RESET_USAGE_COUNTER',
+  'UPDATE_PREFERENCES',
+]);
+
 // --- wiring ----------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener(
   (message: PanelRequest | OffscreenEvent, _sender, sendResponse) => {
-    if ('kind' in message) {
-      switch (message.kind) {
-        // --- offscreen events ---
-        case 'SOCKET_OPEN':
-          if (runtime.session.sessionId === message.sessionId) dispatch({ type: 'SOCKET_OPEN' });
-          return false;
-        case 'SOCKET_CLOSED':
-          if (runtime.session.sessionId === message.sessionId) {
-            dispatch({ type: 'SOCKET_CLOSED', recoverable: false });
-            void stopSession();
-          }
-          return false;
-        case 'SERVER_FRAME':
-          handleServerFrame(message.sessionId, message.raw);
-          return false;
-        case 'CAPTURE_FAILED':
-          if (runtime.session.sessionId === message.sessionId) {
-            fail(message.code as ErrorCode, message.reason);
-            void stopSession();
-          }
-          return false;
-        case 'TEARDOWN_COMPLETE':
-          dispatch({ type: 'TEARDOWN_COMPLETE' });
-          return false;
+    if (!message || typeof message !== 'object' || !('kind' in message)) return false;
 
-        // --- panel requests ---
-        case 'GET_STATE':
-          sendResponse(currentPanelState());
-          return false;
-        case 'LOGIN':
-          dispatch({ type: 'LOGIN_STARTED' });
-          void login(api)
-            .then(async () => {
-              dispatch({ type: 'LOGIN_SUCCEEDED' });
-              await syncAccount();
-            })
-            .catch((cause: unknown) => {
-              const code = cause instanceof VoxError ? cause.code : 'auth_failed';
-              runtime.errorCode = code;
-              dispatch({ type: 'LOGIN_FAILED', reason: code });
-            });
-          return false;
-        case 'LOGOUT':
-          void (async () => {
-            await stopSession();
-            await clearSession();
-            runtime.account = null;
-            dispatch({ type: 'LOGGED_OUT' });
-          })();
-          return false;
-        case 'REFRESH_ACCOUNT':
-          void syncAccount().catch((cause: unknown) => {
-            runtime.errorCode = cause instanceof VoxError ? cause.code : 'backend_unavailable';
-            broadcast();
-          });
-          return false;
-        case 'START_SESSION':
-          void startSession();
-          return false;
-        case 'STOP_SESSION':
-          void stopSession();
-          return false;
-        case 'RESET_USAGE_COUNTER':
-          runtime.meter = resetCounter(runtime.meter);
-          broadcast();
-          return false;
-        case 'UPDATE_PREFERENCES':
-          void savePreferences(message.patch);
-          return false;
-        default:
-          return false;
-      }
+    if (message.kind === 'GET_STATE') {
+      // Must report rehydrated state, so reply asynchronously. Returning true keeps the
+      // response channel open — without it Chrome closes it and the caller hangs.
+      void ready.then(() => sendResponse(currentPanelState()));
+      return true;
     }
+
+    if (PANEL_KINDS.has(message.kind)) {
+      void ready.then(() => handleCommand(message as PanelRequest));
+      return false;
+    }
+
+    void ready.then(() => handleOffscreenEvent(message as OffscreenEvent));
     return false;
   },
 );
@@ -552,10 +641,3 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onInstalled.addListener(() => {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
-
-void (async () => {
-  await loadPreferences();
-  const token = await readToken();
-  runtime.session = initialContext(Boolean(token));
-  if (token) await syncAccount().catch(() => {});
-})();

@@ -30,9 +30,38 @@ export interface PipelineOptions {
   originalVolume: number;
 }
 
-function pickMimeType(): string {
-  return MediaRecorder.isTypeSupported(AUDIO.mimeType) ? AUDIO.mimeType : AUDIO.fallbackMimeType;
+/**
+ * Browser APIs the pipeline touches, injected so the whole class is testable without a
+ * real tab, a real microphone, or a real socket. `activeTab` makes tab capture
+ * impossible to automate in a test browser (Chrome: "Extension has not been invoked for
+ * the current page"), so injecting the environment is the only way to cover this file at
+ * all — and the seam costs nothing in production, where the defaults are used.
+ */
+export interface PipelineEnv {
+  getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>;
+  createAudioContext(): AudioContext;
+  createRecorder(stream: MediaStream, options: MediaRecorderOptions): MediaRecorder;
+  createSocket(url: string): WebSocket;
+  isTypeSupported(mime: string): boolean;
 }
+
+const DEFAULT_ENV: PipelineEnv = {
+  getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+  createAudioContext: () => new AudioContext(),
+  createRecorder: (stream, options) => new MediaRecorder(stream, options),
+  createSocket: (url) => new WebSocket(url),
+  isTypeSupported: (mime) => MediaRecorder.isTypeSupported(mime),
+};
+
+/** Stop sending when the socket has this much unsent data — stale audio is worthless. */
+export const BACKPRESSURE_BYTES = 1_000_000;
+
+/**
+ * `WebSocket.OPEN`, as a literal. Reading it off the global couples the pipeline to a
+ * global that does not exist in every environment (it is absent under happy-dom), for
+ * no benefit — the value is fixed by the WHATWG spec.
+ */
+const WS_OPEN = 1;
 
 export class CapturePipeline {
   private stream: MediaStream | null = null;
@@ -45,7 +74,12 @@ export class CapturePipeline {
   constructor(
     private readonly options: PipelineOptions,
     private readonly callbacks: PipelineCallbacks,
+    private readonly env: PipelineEnv = DEFAULT_ENV,
   ) {}
+
+  private pickMimeType(): string {
+    return this.env.isTypeSupported(AUDIO.mimeType) ? AUDIO.mimeType : AUDIO.fallbackMimeType;
+  }
 
   async start(): Promise<void> {
     try {
@@ -68,7 +102,7 @@ export class CapturePipeline {
    * calls `tabCapture.getMediaStreamId`, and only this document may consume the id.
    */
   private async openStream(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    this.stream = await this.env.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
@@ -90,7 +124,7 @@ export class CapturePipeline {
   /** Re-route captured audio to the speakers so the tab does not go silent. */
   private buildAudioGraph(): void {
     if (!this.stream) return;
-    this.context = new AudioContext();
+    this.context = this.env.createAudioContext();
     const source = this.context.createMediaStreamSource(this.stream);
     this.gain = this.context.createGain();
     this.gain.gain.value = this.options.originalVolume;
@@ -99,7 +133,7 @@ export class CapturePipeline {
   }
 
   private openSocket(): void {
-    const socket = new WebSocket(this.options.wsUrl);
+    const socket = this.env.createSocket(this.options.wsUrl);
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
 
@@ -122,8 +156,8 @@ export class CapturePipeline {
 
   private startRecorder(): void {
     if (!this.stream) return;
-    const recorder = new MediaRecorder(this.stream, {
-      mimeType: pickMimeType(),
+    const recorder = this.env.createRecorder(this.stream, {
+      mimeType: this.pickMimeType(),
       audioBitsPerSecond: AUDIO.bitsPerSecond,
     });
     this.recorder = recorder;
@@ -131,12 +165,12 @@ export class CapturePipeline {
     recorder.addEventListener('dataavailable', (event) => {
       if (event.data.size === 0) return;
       const socket = this.socket;
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      if (!socket || socket.readyState !== WS_OPEN) return;
       // Drop rather than buffer when the socket backs up: stale audio is worthless
       // for live subtitles, and an unbounded queue is how extensions leak memory.
-      if (socket.bufferedAmount > 1_000_000) return;
+      if (socket.bufferedAmount > BACKPRESSURE_BYTES) return;
       void event.data.arrayBuffer().then((buffer) => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(buffer);
+        if (socket.readyState === WS_OPEN) socket.send(buffer);
       });
     });
 
@@ -170,7 +204,7 @@ export class CapturePipeline {
     if (this.socket) {
       const socket = this.socket;
       this.socket = null;
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === WS_OPEN) {
         try {
           socket.send(JSON.stringify({ type: 'stop' }));
         } catch {

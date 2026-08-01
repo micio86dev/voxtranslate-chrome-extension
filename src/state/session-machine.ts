@@ -111,6 +111,11 @@ export function transition(
   switch (ctx.state) {
     case 'logged_out':
       if (event.type === 'LOGIN_STARTED') return to('authenticating');
+      // A session can also be established without an interactive login — a stored token
+      // that validates on wake. Without this, the account would populate while the
+      // machine stayed logged_out: the panel would show who you are and still refuse
+      // to start.
+      if (event.type === 'LOGIN_SUCCEEDED') return to('ready', { error: null });
       return ignore();
 
     case 'authenticating':

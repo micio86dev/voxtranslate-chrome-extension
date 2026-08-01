@@ -29,11 +29,20 @@ export interface TokenResponse {
 export type TokenProvider = () => Promise<string | null>;
 
 export class ApiClient {
+  private readonly fetchImpl: typeof fetch;
+
   constructor(
     private readonly getToken: TokenProvider,
     private readonly onUnauthorized: () => void,
-    private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    fetchImpl?: typeof fetch,
+  ) {
+    // `fetch` MUST be bound to the global. Storing it as an instance property and
+    // calling `this.fetchImpl(...)` rebinds `this` to the ApiClient, which Chrome
+    // rejects with "Illegal invocation" — a failure that looks exactly like the
+    // backend being unreachable. Caught by the e2e suite, not by unit tests, because
+    // unit tests inject their own function.
+    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
+  }
 
   private async request<T>(
     path: string,
