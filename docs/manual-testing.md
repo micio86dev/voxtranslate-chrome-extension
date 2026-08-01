@@ -21,9 +21,21 @@ Record the Chrome version and the build commit with the results.
 
 ## Prerequisites
 
-- [ ] Backend deployed with the extension session mode and `/api/extension/*` endpoints.
-- [ ] Extension ID on the backend CORS allow-list.
+- [ ] Backend deployed with `GET /ws/extension` and `/api/extension/*` (shipped).
+- [ ] **`EXTENSION_ORIGINS=chrome-extension://<id>` set on the API.** Until this is set
+      every side-panel `fetch` is blocked by CORS and the panel stays on "sign in".
+      Pin the id with a manifest `key` first, or it changes on each unpacked load.
+- [ ] The web app deployed with `/extension/connect`.
 - [ ] Test account with a small positive balance.
+
+## 0. Backend smoke test (do this first — it isolates client bugs from server bugs)
+
+- [ ] `GET /ws/extension?lang=it&token=<jwt>` upgrades rather than 400/401.
+- [ ] Omitting `token` is rejected — extension sessions have no guest tier.
+- [ ] `lang=auto` is rejected with "target language cannot be auto".
+- [ ] Opening a session creates ONE row in `usage_sessions` and finalises it on close.
+- [ ] While translating foreign audio, the balance decreases; while the source language
+      matches the target, it does **not**.
 
 ## 1. Install and first run
 
