@@ -1,0 +1,5 @@
+dist
+node_modules
+release
+bun.lock
+src/types/languages.json
