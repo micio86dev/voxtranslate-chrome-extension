@@ -5,6 +5,13 @@ export default defineConfig({
   resolve: {
     alias: { '@': resolve(__dirname, 'src') },
   },
+  // The same build-time constants vite.config.ts defines. Without them any module that
+  // imports shared/config throws at import time under Vitest.
+  define: {
+    __API_ORIGIN__: JSON.stringify('http://localhost:0'),
+    __APP_ORIGIN__: JSON.stringify('http://localhost:0'),
+    __DEV_BUILD__: 'true',
+  },
   test: {
     environment: 'happy-dom',
     include: ['tests/**/*.test.ts'],

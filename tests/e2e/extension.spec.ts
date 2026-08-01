@@ -10,10 +10,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium, expect, test, type BrowserContext } from '@playwright/test';
 
-const DIST = resolve(__dirname, '../../dist');
+// This file is ESM, so `__dirname` does not exist — derive it from import.meta.url.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DIST = resolve(HERE, '../../dist');
 
 let context: BrowserContext;
 let extensionId: string;

@@ -161,3 +161,20 @@ describe('session state machine', () => {
     }
   });
 });
+
+describe('session restoration', () => {
+  it('accepts a validated stored token as a login, without an interactive flow', () => {
+    // A woken worker that finds a valid token must reach `ready`. Otherwise the account
+    // renders in the panel while Start stays refused.
+    const restored = transition(initialContext(false), { type: 'LOGIN_SUCCEEDED' });
+    expect(restored.accepted).toBe(true);
+    expect(restored.context.state).toBe('ready');
+  });
+
+  it('lets a restored session start immediately', () => {
+    const restored = transition(initialContext(false), { type: 'LOGIN_SUCCEEDED' }).context;
+    const started = transition(restored, { type: 'START_REQUESTED' }, 's1');
+    expect(started.accepted).toBe(true);
+    expect(started.context.state).toBe('requesting_capture');
+  });
+});

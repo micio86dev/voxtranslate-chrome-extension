@@ -7,9 +7,10 @@ Part of the [VoxTranslate](https://voxtranslate.app) platform. This repository i
 in the main VoxTranslate workspace as a Git submodule.
 
 > **Status: foundation complete, not yet end-to-end functional.** The extension builds,
-> typechecks, lints, and passes 103 tests. It cannot yet translate a real tab, because the
-> backend session mode it depends on has not been implemented. See
-> [What works today](#what-works-today) — that section is the honest one.
+> typechecks, lints, and passes 123 unit/integration tests plus 10 browser end-to-end
+> tests. It cannot yet translate a real tab, because the backend session mode it depends
+> on has not been implemented. See [What works today](#what-works-today) — that section is
+> the honest one.
 
 ---
 
@@ -36,22 +37,31 @@ in the main VoxTranslate workspace as a Git submodule.
 
 ## What works today
 
-**Verified on this machine** (`bun run verify`):
+**Verified on this machine** (`bun run verify` + `bun run test:e2e`):
 
 - Builds to a valid MV3 bundle whose emitted paths match the manifest.
 - TypeScript strict mode passes with no `any` and no suppressions.
 - ESLint passes with zero warnings.
-- 103 unit + integration tests pass, covering the session state machine, locale
+- **123 unit + integration tests** covering the session state machine, locale
   normalisation, detected-language stability, translated-audio ordering, reconnect
-  backoff, usage accounting, PKCE, and inbound-frame validation.
+  backoff, usage accounting, PKCE, inbound-frame validation, and the capture pipeline
+  (audio graph, encoder settings, backpressure, teardown) with injected browser APIs.
+- **10 browser end-to-end tests** against a real unpacked extension and a fake backend:
+  session restore from a stored token, account sync, side-panel rendering, tier-filtered
+  language list, preference persistence, usage-counter reset, logout, and the
+  refuses-to-start-without-an-account path.
 
-**Written but not verified end-to-end** — needs a human with Chrome, a logged-in account,
-and a funded balance:
+**Cannot be automated — verified only by hand** (`docs/manual-testing.md`):
 
-- Tab capture and the original-audio re-routing graph.
-- Subtitle overlay rendering on real pages, fullscreen, and SPA navigation.
-- Live WebSocket streaming to the backend.
-- Repeated start/stop resource cleanup.
+- Tab capture. `chrome.tabCapture.getMediaStreamId` requires the `activeTab` grant, which
+  only a real user invocation of the extension action produces. Chrome refuses otherwise
+  with _"Extension has not been invoked for the current page (see activeTab permission)."_
+  Playwright drives page content, not browser chrome, so it cannot produce that click.
+  Requesting `<all_urls>` would make the tests pass and the product worse, so the
+  capture-dependent e2e cases are explicitly skipped with that reason in the file.
+- Subtitle overlay appearance on real pages, fullscreen, and SPA navigation.
+- Live streaming against the real backend, and end-to-end latency.
+- Repeated start/stop cleanup observed in Chrome's task manager.
 
 **Not implemented:**
 
@@ -174,9 +184,13 @@ bun run build
 ## Testing
 
 ```bash
-bun run test          # 103 unit + integration tests
-bun run test:e2e      # Playwright with the unpacked extension
+bun run test          # 123 unit + integration tests
+bun run test:e2e      # 10 browser tests against a real unpacked extension
+bun run verify        # typecheck + lint + test + build
 ```
+
+The e2e suite builds the extension against a **local fake backend** (`tests/e2e/fixtures/`)
+that speaks the real protocol, so it never touches production and never spends credit.
 
 No test contacts a translation provider and no test spends real credit. Integration tests
 drive the real modules through a scripted server rather than the network, which is what

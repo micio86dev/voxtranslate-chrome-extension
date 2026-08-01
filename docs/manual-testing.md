@@ -4,6 +4,19 @@ Automated tests cannot cover tab capture, real audio, on-page rendering, or late
 checklist is what actually verifies those, and it must be run by a human with Chrome, a
 logged-in VoxTranslate account, and a funded balance.
 
+**Why capture cannot be automated** (verified, not assumed): `tabCapture.getMediaStreamId`
+requires the `activeTab` grant, which only a real user invocation of the extension action
+produces. Chrome refuses otherwise with the exact message _"Extension has not been invoked
+for the current page (see activeTab permission)."_ Playwright drives page content, not
+browser chrome, so it cannot click the action. Everything downstream of the stream — the
+audio graph, encoder settings, backpressure, teardown — IS covered automatically in
+`tests/unit/capture-pipeline.test.ts` with injected browser APIs.
+
+**Already covered automatically**, so do not re-test by hand: account sync, side-panel
+rendering, tier-filtered language list, preference persistence, usage-counter reset,
+logout and token clearing, and the refuse-to-start-without-an-account path
+(`tests/e2e/pipeline.spec.ts`).
+
 Record the Chrome version and the build commit with the results.
 
 ## Prerequisites
