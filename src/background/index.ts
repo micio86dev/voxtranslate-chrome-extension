@@ -264,20 +264,17 @@ async function ensureOffscreen(): Promise<void> {
   });
 }
 
-function buildWsUrl(sessionId: string, token: string): string {
-  // Room is derived from the session id: an extension session is a private room of one,
-  // never joinable and never listed publicly.
+function buildWsUrl(_sessionId: string, token: string): string {
+  // The dedicated extension route, NOT the room `/ws`. The server builds a private
+  // two-peer room internally (source + listener) so fan-out, billing and the
+  // same-language bypass all work — see server/src/extension.rs.
   const params = new URLSearchParams({
-    room: `ext-${sessionId}`,
     lang: runtime.preferences.targetLanguage,
+    source: runtime.preferences.sourceLanguage,
     token,
     engine: runtime.preferences.engineId,
-    name: 'Tab audio',
-    public: 'false',
-    client: 'chrome-extension',
-    source: runtime.preferences.sourceLanguage,
   });
-  return `${WS_ORIGIN}/ws?${params.toString()}`;
+  return `${WS_ORIGIN}/ws/extension?${params.toString()}`;
 }
 
 async function startSession(): Promise<void> {

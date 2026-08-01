@@ -6,11 +6,12 @@ Twitch, Udemy, podcasts, webinars, streaming platforms, anything with sound.
 Part of the [VoxTranslate](https://voxtranslate.app) platform. This repository is included
 in the main VoxTranslate workspace as a Git submodule.
 
-> **Status: foundation complete, not yet end-to-end functional.** The extension builds,
-> typechecks, lints, and passes 136 unit/integration tests plus 10 browser end-to-end
-> tests. It cannot yet translate a real tab, because the backend session mode it depends
-> on has not been implemented. See [What works today](#what-works-today) — that section is
-> the honest one.
+> **Status: feature-complete, pending a human end-to-end check.** The extension and its
+> backend both build, lint, and pass their suites. The backend session mode, the PKCE
+> login endpoints and the web-app handoff page are implemented. What has NOT happened is
+> a human loading it in Chrome against a live account — tab capture cannot be automated
+> (see below), so nobody has yet watched real subtitles appear over a real video.
+> [What works today](#what-works-today) is the honest section.
 
 ---
 
@@ -366,27 +367,45 @@ See [`PRIVACY.md`](PRIVACY.md) for the full notice. In short:
 The extension cannot function end-to-end until these land. Full analysis in
 [`docs/discovery.md`](docs/discovery.md).
 
-| #   | Change                                                                                            | Risk     | Status      |
-| --- | ------------------------------------------------------------------------------------------------- | -------- | ----------- |
-| 1   | Allow `chrome-extension://<id>` in the CORS allow-list                                            | low      | not started |
-| 2   | `POST /api/extension/code` + `POST /api/extension/token` (PKCE handoff)                           | medium   | not started |
-| 3   | **Extension session mode on `/ws`** — single peer, explicit source/target split, new `MeterScope` | **high** | not started |
-| 4   | Server-side usage-counter reset baseline (column + migration)                                     | medium   | deferred    |
+| #   | Change                                                                  | Risk     | Status                             |
+| --- | ----------------------------------------------------------------------- | -------- | ---------------------------------- |
+| 1   | Allow `chrome-extension://<id>` in the CORS allow-list                  | low      | **done** — set `EXTENSION_ORIGINS` |
+| 2   | `POST /api/extension/code` + `POST /api/extension/token` (PKCE handoff) | medium   | **done**                           |
+| 3   | **Extension session mode** — `GET /ws/extension`                        | **high** | **done** — see below               |
+| 4   | Server-side usage-counter reset baseline (column + migration)           | medium   | deferred                           |
+
+### How the session mode works
+
+`server/src/extension.rs` adds `GET /ws/extension`. Rather than change the room model, one
+connection joins a **private room as two peers**:
+
+```
+source peer    id "<sid>-src"   lang "auto"     owns the Deepgram session
+listener peer  id "<sid>"       lang <target>   receives subtitles, is billed
+```
+
+Everything else then falls out of behaviour that already existed, with **no change to
+`rooms.rs`, `usage.rs` or any engine**: fan-out sees one target language and translates
+into it; the meter bills one stream per interval; and when detection resolves the source
+language to the listener's, delivery is skipped _and_ the meter skips the tick — the
+"already in your language" bypass, unbilled, for free.
+
+No migration was needed. The handoff code is a signed, PKCE-bound JWT with a 60-second
+life rather than a stored row, which avoids touching a live billing database. The
+trade-off is that a code cannot be revoked inside that minute; it is worthless without
+the verifier, which never leaves the extension.
+
+**Required environment:** `EXTENSION_ORIGINS=chrome-extension://<id>` on the API. Until it
+is set, the side panel's `fetch` calls are blocked by CORS.
 
 The client side of reconnection, `capture_format` switching and translated-audio playback
 is implemented and tested, but none of it can be exercised until #3 exists — the server
 never sends those frames to a session it does not recognise.
 
-**#3 is the blocker.** VoxTranslate's model is a room of symmetric peers, each with one
+**Why #3 was hard.** VoxTranslate's model is a room of symmetric peers, each with one
 language they both speak and hear in. Translation targets are derived from _other_ peers,
-so a single-peer room translates nothing and bills nothing. The extension is one audio
-source plus one listener — asymmetric. Nothing on the client side works around that.
-
-> The VoxTranslate server does not compile on every developer machine (it needs rustc 1.92;
-> a 1.89 toolchain fails to resolve the `typst` dependency tree). Backend changes for this
-> feature must be verified in CI.
-
----
+so a single-peer room translates nothing and bills nothing. The two-peer trick above is
+what makes an asymmetric tab-audio session fit that model without rewriting it.
 
 ## Chrome Web Store packaging
 

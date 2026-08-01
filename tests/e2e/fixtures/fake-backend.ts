@@ -144,7 +144,8 @@ export async function startFakeBackend(): Promise<FakeBackend> {
     res.end('not found');
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  // Mirrors the real dedicated extension route (server/src/extension.rs).
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws/extension' });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     sockets.add(ws);
