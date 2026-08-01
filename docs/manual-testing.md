@@ -36,6 +36,21 @@ Record the Chrome version and the build commit with the results.
 - [ ] Opening a session creates ONE row in `usage_sessions` and finalises it on close.
 - [ ] While translating foreign audio, the balance decreases; while the source language
       matches the target, it does **not**.
+- [ ] **Billing follows the session, not the socket**: connect without pressing Start and
+      confirm the balance does NOT move; press Stop and confirm it stops moving again.
+      (The meter is spawned per streaming session for exactly this reason.)
+- [ ] After `balance_exhausted`, sending `start` again is refused with
+      `insufficient_balance` — it must never open an unmetered session.
+
+### PKCE exchange (cannot be covered in CI — billing is not configured there)
+
+- [ ] `POST /api/extension/code` without an Authorization header is rejected.
+- [ ] With a valid session it returns a code; the code is a JWT that expires in 60 s.
+- [ ] `POST /api/extension/token` with that code and the matching verifier returns a
+      token + profile.
+- [ ] The **same** code presented with a DIFFERENT verifier is rejected.
+- [ ] A session JWT presented as a `code` is rejected (the `kind` claim guards this).
+- [ ] A code older than 60 s is rejected.
 
 ## 1. Install and first run
 
