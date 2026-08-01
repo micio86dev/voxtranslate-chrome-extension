@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # --frozen-lockfile so CI fails on an out-of-date lockfile instead of quietly
+      # resolving different versions than a developer has locally.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit and integration tests
+        run: bun run test
+
+      - name: Build
+        run: bun run build
+
+      # The manifest promises Chrome these paths exist; the store rejects a bundle
+      # missing any of them, but only after upload. Catch it here instead.
+      - name: Verify bundle completeness
+        run: bun run package
+
+      - name: Upload extension bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-${{ github.sha }}
+          path: release/*.zip
+          retention-days: 14
+
+  e2e:
+    name: browser end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Install Chromium
+        run: bunx playwright install chromium --with-deps
+
+      # Extensions need a headed browser; xvfb provides a display on the runner.
+      - name: End-to-end tests
+        run: xvfb-run --auto-servernum bunx playwright test
+
+      - name: Upload failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.sha }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  secrets:
+    name: no secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The extension holds no API keys by design — every privileged call goes through
+      # the VoxTranslate backend. This job keeps that true.
+      - name: Scan for credentials
+        run: |
+          if grep -rEn --exclude-dir=node_modules --exclude-dir=.git \
+              --exclude='*.lock' --exclude='ci.yml' \
+              '(api[_-]?key|client[_-]?secret|BEGIN [A-Z ]*PRIVATE KEY)[[:space:]]*[:=][[:space:]]*["\x27][A-Za-z0-9_\-]{16,}' \
+              . ; then
+            echo "::error::possible credential committed"
+            exit 1
+          fi
+          echo "no credentials found"
