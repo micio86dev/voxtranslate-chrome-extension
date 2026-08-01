@@ -464,6 +464,13 @@ The extension follows the workspace Git Flow: `feature/<name>` off `develop`,
 - **The usage-counter reset is device-local**, not synced across devices.
 - **No server-side logout.** VoxTranslate has no token revocation for any client.
 - **Chrome only.** No other browser has been tested, so none is claimed.
+- **Language detection runs once per session start, not continuously.** The Standard engine
+  probes the first few seconds of audio and then opens a Deepgram stream pinned to that
+  language (`engine/standard.rs` calls `set_peer_lang` exactly once). So if a video
+  _switches_ language halfway through, the extension will not notice: no contradicting
+  `language_detected` event is ever sent, and the client's hysteresis has nothing to act
+  on. Stopping and restarting the session re-detects. Continuous re-detection would be a
+  backend change, and is not implemented.
 - **Language bypass depends on backend detection quality.** The client adds hysteresis
   (3 agreeing detections at ≥0.85 confidence over ≥4 s to enter bypass, 1 to leave), but it
   cannot be better than the signal it is given.
