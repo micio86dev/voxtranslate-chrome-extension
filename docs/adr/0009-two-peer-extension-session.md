@@ -61,3 +61,26 @@ express something the existing model can already say.
 - No migration. The PKCE handoff code is a signed, 60-second JWT rather than a stored row,
   so nothing was altered on a live billing database. A code cannot be revoked inside that
   minute — acceptable, since it is useless without the verifier.
+
+## Bugs this design still let in (found on review, before deploy)
+
+Reusing the room model made the _shape_ right, but three billing-adjacent mistakes still
+had to be caught by reading the code again:
+
+1. **The two joins were chained with `and_then`.** A failure on the second left the
+   listener peer in the room with nothing driving or ending it. Practically unreachable —
+   a new room holding one peer against a cap of four — but correctness should not depend
+   on that staying true.
+2. **A session could be restarted after credits were exhausted.** The meter task exits for
+   good on exhaustion, and the loop went on accepting `start`, so a client that simply
+   sent it again got a fully working, _unmetered_ session. The extension tears down on
+   `balance_exhausted`, but the server must never depend on a well-behaved client for
+   billing.
+3. **The meter ran for the whole connection, not the streaming session.** It was spawned
+   at connect, so it charged from the moment the side panel opened a socket — before Start
+   and after Stop, until the tab closed. `billable_streams` only asks whether a target
+   language differs from the source; it cannot tell whether audio is flowing. The room
+   path had this right all along (`lib::spawn_meter` runs only once a session opens), and
+   the fix was to match it.
+
+The pattern in all three: _reusing a mechanism is not the same as reusing its lifecycle._
