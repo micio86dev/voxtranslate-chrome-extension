@@ -38,6 +38,11 @@ const required = [
   'content/overlay.js',
   'offscreen/document.html',
   'offscreen/index.js',
+  // AudioWorklet processors are loaded at runtime by URL, so nothing imports them and
+  // a bundler change could silently drop them — at which point PCM capture and
+  // translated-speech playback both fail with no build error.
+  'pcm-capture-worklet.js',
+  'pcm-playback-worklet.js',
 ].filter((p): p is string => typeof p === 'string');
 
 const missing = required.filter((p) => !existsSync(join(DIST, p)));

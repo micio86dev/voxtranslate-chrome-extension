@@ -20,6 +20,7 @@ import {
   type LanguageModeState,
 } from '@/audio/language-mode';
 import { WS_ORIGIN } from '@/shared/config';
+import { DEFAULT_BACKOFF, isFatalCloseCode, nextBackoff } from '@/websocket/backoff';
 import { fromServerCode, redact, VoxError, type ErrorCode } from '@/shared/errors';
 import {
   DEFAULT_PREFERENCES,
@@ -60,6 +61,10 @@ interface Runtime {
   lowBalance: boolean;
   capturedTabId: number | null;
   tabTitle: string | null;
+  /** Stream id of the live capture, so a reconnect never re-requests tabCapture. */
+  streamId: string | null;
+  reconnect: { attempt: number; startedAt: number; timer: number | null };
+  translatedAudioActive: boolean;
 }
 
 const runtime: Runtime = {
@@ -72,6 +77,9 @@ const runtime: Runtime = {
   lowBalance: false,
   capturedTabId: null,
   tabTitle: null,
+  streamId: null,
+  reconnect: { attempt: 0, startedAt: 0, timer: null },
+  translatedAudioActive: false,
 };
 
 const api = new ApiClient(readToken, () => {
@@ -142,11 +150,13 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
     }
   }
 
-  if (patch.originalAudioVolume !== undefined && runtime.session.sessionId) {
+  if (patch.originalAudioVolume !== undefined) pushVolume();
+
+  if (patch.translatedAudioEnabled !== undefined && runtime.session.sessionId) {
     void chrome.runtime.sendMessage({
-      kind: 'SET_ORIGINAL_VOLUME',
+      kind: 'SET_TRANSLATED_AUDIO',
       sessionId: runtime.session.sessionId,
-      volume: effectiveGain(),
+      enabled: patch.translatedAudioEnabled,
     });
   }
   broadcast();
@@ -156,8 +166,12 @@ function effectiveGain(): number {
   return originalAudioGain({
     mode: runtime.languageMode.mode,
     preferredGain: runtime.preferences.originalAudioVolume,
-    translatedAudioActive: false,
-    translatedAudioDegraded: !runtime.preferences.translatedAudioEnabled,
+    translatedAudioActive: runtime.translatedAudioActive,
+    // "Degraded" means the user asked for translated speech and is not getting it.
+    // With the feature off there is nothing to degrade, so the original must not be
+    // force-raised over the user's own volume choice.
+    translatedAudioDegraded:
+      runtime.preferences.translatedAudioEnabled && runtime.errorCode === 'translated_audio_failed',
   });
 }
 
@@ -306,6 +320,7 @@ async function startSession(): Promise<void> {
     return;
   }
 
+  runtime.streamId = streamId;
   dispatch({ type: 'CAPTURE_GRANTED' });
 
   if (runtime.preferences.subtitlesEnabled) await injectOverlay(tab.id);
@@ -351,6 +366,7 @@ async function sendToTab(tabId: number, command: OverlayCommand): Promise<void> 
 
 async function stopSession(): Promise<void> {
   const sessionId = runtime.session.sessionId;
+  cancelReconnect();
   if (!dispatch({ type: 'STOP_REQUESTED' })) return;
 
   if (sessionId) {
@@ -361,6 +377,93 @@ async function stopSession(): Promise<void> {
     runtime.capturedTabId = null;
   }
   runtime.tabTitle = null;
+  runtime.streamId = null;
+  runtime.translatedAudioActive = false;
+}
+
+// --- reconnection ----------------------------------------------------------
+
+function cancelReconnect(): void {
+  if (runtime.reconnect.timer !== null) clearTimeout(runtime.reconnect.timer);
+  runtime.reconnect = { attempt: 0, startedAt: 0, timer: null };
+}
+
+/**
+ * Decide what to do about a dropped socket.
+ *
+ * Reconnection reopens ONLY the transport. Capture stays alive, because a `tabCapture`
+ * stream id cannot be re-minted without another user gesture — tearing it down would
+ * force the user to click Start again for a blip of network.
+ *
+ * Bounded on purpose: a silently reconnecting extension is one that holds a tab captured
+ * while the user wonders why nothing is happening.
+ */
+async function handleSocketClosed(sessionId: string, code: number): Promise<void> {
+  if (runtime.session.sessionId !== sessionId) return;
+
+  // Auth, billing and deliberate closes can never succeed on retry — and retrying a
+  // billing failure risks a duplicate charged session.
+  if (isFatalCloseCode(code) || runtime.streamId === null) {
+    dispatch({ type: 'SOCKET_CLOSED', recoverable: false });
+    await stopSession();
+    return;
+  }
+
+  if (runtime.reconnect.startedAt === 0) runtime.reconnect.startedAt = Date.now();
+  const elapsed = Date.now() - runtime.reconnect.startedAt;
+  const decision = nextBackoff(runtime.reconnect.attempt, elapsed, DEFAULT_BACKOFF);
+
+  if (!decision.retry) {
+    console.warn('[voxtranslate] giving up reconnect:', decision.reason);
+    dispatch({ type: 'RECONNECT_EXHAUSTED' });
+    runtime.errorCode = 'socket_disconnected';
+    await stopSession();
+    return;
+  }
+
+  dispatch({ type: 'SOCKET_CLOSED', recoverable: true });
+  runtime.reconnect.attempt = decision.attempt;
+  runtime.errorCode = 'socket_disconnected';
+
+  // While the transport is down there is no translation, so the user must hear the
+  // original rather than a ducked or silent tab.
+  runtime.translatedAudioActive = false;
+  pushVolume();
+  await showOverlayStatus('Reconnecting…');
+
+  runtime.reconnect.timer = setTimeout(() => {
+    void resumeSocket(sessionId);
+  }, decision.delayMs) as unknown as number;
+  broadcast();
+}
+
+async function resumeSocket(sessionId: string): Promise<void> {
+  if (runtime.session.sessionId !== sessionId) return;
+  const token = await readToken();
+  if (!token) {
+    await handleAuthLost();
+    return;
+  }
+  void chrome.runtime.sendMessage({
+    kind: 'RECONNECT_SOCKET',
+    sessionId,
+    wsUrl: buildWsUrl(sessionId, token),
+  });
+}
+
+function pushVolume(): void {
+  const sessionId = runtime.session.sessionId;
+  if (!sessionId) return;
+  void chrome.runtime.sendMessage({
+    kind: 'SET_ORIGINAL_VOLUME',
+    sessionId,
+    volume: effectiveGain(),
+  });
+}
+
+async function showOverlayStatus(text: string | null): Promise<void> {
+  if (runtime.capturedTabId === null) return;
+  await sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_STATUS', text });
 }
 
 // --- inbound server frames -------------------------------------------------
@@ -406,7 +509,17 @@ function handleServerFrame(sessionId: string, raw: string): void {
         },
         runtime.preferences.targetLanguage,
       );
-      if (runtime.languageMode.mode !== previous) applyAudioMode();
+      if (runtime.languageMode.mode !== previous) {
+        // Entering bypass must silence queued translated speech immediately.
+        if (runtime.languageMode.mode === 'bypassed' && runtime.session.sessionId) {
+          runtime.translatedAudioActive = false;
+          void chrome.runtime.sendMessage({
+            kind: 'FLUSH_TRANSLATED_AUDIO',
+            sessionId: runtime.session.sessionId,
+          });
+        }
+        applyAudioMode();
+      }
       broadcast();
       break;
     }
@@ -420,6 +533,31 @@ function handleServerFrame(sessionId: string, raw: string): void {
     case 'low_balance': {
       runtime.lowBalance = true;
       broadcast();
+      break;
+    }
+    case 'capture_format': {
+      if (!('pcm' in message)) break;
+      // The server decides the encoding; the client only complies. Ignoring this would
+      // keep sending Opus to an engine that needs PCM, and transcription would stop.
+      void chrome.runtime.sendMessage({
+        kind: 'SET_PCM_MODE',
+        sessionId,
+        pcm: message.pcm,
+      });
+      break;
+    }
+    case 'translated_audio': {
+      if (!('pcm16_b64' in message)) break;
+      if (!runtime.preferences.translatedAudioEnabled) break;
+      // In bypass there is nothing to translate, so any speech still in flight belongs
+      // to a moment that has passed — playing it over the original is worse than a gap.
+      if (runtime.languageMode.mode === 'bypassed') break;
+      void chrome.runtime.sendMessage({
+        kind: 'PLAY_TRANSLATED_AUDIO',
+        sessionId,
+        seq: message.seq,
+        pcm16_b64: message.pcm16_b64,
+      });
       break;
     }
     case 'balance_exhausted': {
@@ -567,13 +705,25 @@ function describe(cause: unknown): string {
 function handleOffscreenEvent(event: OffscreenEvent): void {
   switch (event.kind) {
     case 'SOCKET_OPEN':
-      if (runtime.session.sessionId === event.sessionId) dispatch({ type: 'SOCKET_OPEN' });
+      if (runtime.session.sessionId !== event.sessionId) return;
+      // A reconnect that succeeded resumes streaming; a first connect opens it.
+      if (runtime.session.state === 'reconnecting') {
+        dispatch({ type: 'RECONNECT_SUCCEEDED' });
+        runtime.errorCode = null;
+        void showOverlayStatus(null);
+      } else {
+        dispatch({ type: 'SOCKET_OPEN' });
+      }
+      cancelReconnect();
+      pushVolume();
       return;
     case 'SOCKET_CLOSED':
-      if (runtime.session.sessionId === event.sessionId) {
-        dispatch({ type: 'SOCKET_CLOSED', recoverable: false });
-        void stopSession();
-      }
+      void handleSocketClosed(event.sessionId, event.code);
+      return;
+    case 'TRANSLATED_AUDIO_ACTIVE':
+      if (runtime.session.sessionId !== event.sessionId) return;
+      runtime.translatedAudioActive = event.active;
+      pushVolume();
       return;
     case 'SERVER_FRAME':
       handleServerFrame(event.sessionId, event.raw);

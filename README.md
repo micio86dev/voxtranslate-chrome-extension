@@ -7,7 +7,7 @@ Part of the [VoxTranslate](https://voxtranslate.app) platform. This repository i
 in the main VoxTranslate workspace as a Git submodule.
 
 > **Status: foundation complete, not yet end-to-end functional.** The extension builds,
-> typechecks, lints, and passes 123 unit/integration tests plus 10 browser end-to-end
+> typechecks, lints, and passes 136 unit/integration tests plus 10 browser end-to-end
 > tests. It cannot yet translate a real tab, because the backend session mode it depends
 > on has not been implemented. See [What works today](#what-works-today) — that section is
 > the honest one.
@@ -42,7 +42,7 @@ in the main VoxTranslate workspace as a Git submodule.
 - Builds to a valid MV3 bundle whose emitted paths match the manifest.
 - TypeScript strict mode passes with no `any` and no suppressions.
 - ESLint passes with zero warnings.
-- **123 unit + integration tests** covering the session state machine, locale
+- **136 unit + integration tests** covering the session state machine, locale
   normalisation, detected-language stability, translated-audio ordering, reconnect
   backoff, usage accounting, PKCE, inbound-frame validation, and the capture pipeline
   (audio graph, encoder settings, backpressure, teardown) with injected browser APIs.
@@ -68,9 +68,8 @@ in the main VoxTranslate workspace as a Git submodule.
 - The backend extension-session mode (see [Backend changes required](#backend-changes-required)).
   Without it the WebSocket connects but nothing is translated.
 - The `/api/extension/code` and `/api/extension/token` endpoints, so login cannot complete.
-- Translated-audio playback (Phase 9 — the queue and ordering logic exist and are tested;
-  the PCM playback path does not).
 - The Enhanced tier, which is client-direct to Cartesia and needs a second in-browser pipeline.
+- Server-side persistence of the usage-counter reset baseline (it is device-local today).
 
 ---
 
@@ -184,7 +183,7 @@ bun run build
 ## Testing
 
 ```bash
-bun run test          # 123 unit + integration tests
+bun run test          # 136 unit + integration tests
 bun run test:e2e      # 10 browser tests against a real unpacked extension
 bun run verify        # typecheck + lint + test + build
 ```
@@ -253,8 +252,38 @@ user presses Start (explicit gesture — nothing is captured before this)
 **Format: WebM/Opus, 32 kbps, mono, 100 ms timeslice.** This is not a free choice — it
 mirrors exactly what the backend already ingests (`client/src/scripts/audio-capture.ts`,
 spec 0043) so Deepgram is opened with `container=webm` and no server-side codec work is
-needed. The server can request PCM16 @ 24 kHz via a `capture_format` frame when a Pro or
-Premium listener needs one stream to feed two providers.
+needed.
+
+When the server sends `capture_format { pcm: true }` — because one captured stream must
+feed two providers at once — the encoder switches to **PCM16 @ 24 kHz** via an
+AudioWorklet, and back again on request. Only the encoder changes: the capture stream and
+the passthrough graph are untouched, so what the user hears never glitches.
+
+### Reconnection
+
+A dropped socket reopens the **transport only**. Capture and the audio graph stay alive,
+because a `tabCapture` stream id cannot be re-minted without another user gesture —
+tearing it down would force the user to click Start again for a blip of network.
+
+Backoff is exponential with full jitter, bounded by both attempts and elapsed time. Auth,
+billing and deliberate closes are never retried (retrying a billing failure risks a
+duplicate charged session). While the transport is down the original audio is restored and
+the overlay says "Reconnecting…", so the user is never left in silence wondering.
+
+### Translated audio
+
+For tiers that produce speech, the server streams `translated_audio`: PCM16 mono @ 24 kHz,
+base64, sequenced. Frames pass through a queue that enforces ordering, drops duplicates
+and rejects stale segments, then a `pcm-playback-worklet` drains them gaplessly. The
+original audio ducks under the translated voice and returns when it stops.
+
+Both AudioWorklet processors are copied verbatim from the VoxTranslate web client, so both
+clients encode and drain audio identically. They are loaded from an extension-origin URL,
+never a `blob:` URL — the CSP allows `self` only, and a blob worklet fails silently.
+
+Playback degrades safely: if the worklet cannot be built, or speech stalls, the original
+audio is restored, a non-blocking warning appears, and subtitles keep running. Silence is
+never an acceptable output.
 
 Only the tab the user explicitly started on is captured. Never the microphone, never
 another tab, never a background tab.
@@ -343,6 +372,10 @@ The extension cannot function end-to-end until these land. Full analysis in
 | 2   | `POST /api/extension/code` + `POST /api/extension/token` (PKCE handoff)                           | medium   | not started |
 | 3   | **Extension session mode on `/ws`** — single peer, explicit source/target split, new `MeterScope` | **high** | not started |
 | 4   | Server-side usage-counter reset baseline (column + migration)                                     | medium   | deferred    |
+
+The client side of reconnection, `capture_format` switching and translated-audio playback
+is implemented and tested, but none of it can be exercised until #3 exists — the server
+never sends those frames to a session it does not recognise.
 
 **#3 is the blocker.** VoxTranslate's model is a room of symmetric peers, each with one
 language they both speak and hear in. Translation targets are derived from _other_ peers,

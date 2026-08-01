@@ -110,7 +110,15 @@ export type OffscreenCommand =
     }
   | { kind: 'STOP_CAPTURE'; sessionId: string }
   | { kind: 'SET_ORIGINAL_VOLUME'; sessionId: string; volume: number }
-  | { kind: 'SET_TRANSLATED_AUDIO'; sessionId: string; enabled: boolean };
+  | { kind: 'SET_TRANSLATED_AUDIO'; sessionId: string; enabled: boolean }
+  /** Reopen the socket only; capture and the audio graph stay alive (see pipeline.ts). */
+  | { kind: 'RECONNECT_SOCKET'; sessionId: string; wsUrl: string }
+  /** Server asked for a different capture encoding (`capture_format`). */
+  | { kind: 'SET_PCM_MODE'; sessionId: string; pcm: boolean }
+  /** One validated translated-audio frame, already checked at the network boundary. */
+  | { kind: 'PLAY_TRANSLATED_AUDIO'; sessionId: string; seq: number; pcm16_b64: string }
+  /** Drop pending speech — stop, reconnect, or the language bypass engaging. */
+  | { kind: 'FLUSH_TRANSLATED_AUDIO'; sessionId: string };
 
 export type OffscreenEvent =
   | { kind: 'CAPTURE_STARTED'; sessionId: string }
@@ -118,6 +126,7 @@ export type OffscreenEvent =
   | { kind: 'SOCKET_OPEN'; sessionId: string }
   | { kind: 'SOCKET_CLOSED'; sessionId: string; code: number; serverCode?: string }
   | { kind: 'SERVER_FRAME'; sessionId: string; raw: string }
+  | { kind: 'TRANSLATED_AUDIO_ACTIVE'; sessionId: string; active: boolean }
   | { kind: 'TEARDOWN_COMPLETE'; sessionId: string };
 
 // --- background → content script ------------------------------------------

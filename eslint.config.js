@@ -78,4 +78,19 @@ export default tseslint.config(
     files: ['*.config.ts', '*.config.js', 'scripts/**/*.ts'],
     rules: { 'no-console': 'off' },
   },
+  {
+    // AudioWorklet processors run in AudioWorkletGlobalScope, which has its own globals
+    // and no DOM. These files are copied verbatim from the VoxTranslate web client so
+    // both clients encode and drain audio identically — they are deliberately not
+    // rewritten to satisfy the main config.
+    files: ['public/*-worklet.js'],
+    languageOptions: {
+      globals: {
+        AudioWorkletProcessor: 'readonly',
+        registerProcessor: 'readonly',
+        sampleRate: 'readonly',
+        currentTime: 'readonly',
+      },
+    },
+  },
 );

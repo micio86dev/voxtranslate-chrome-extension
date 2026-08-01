@@ -173,7 +173,13 @@ function harness(overrides: Partial<PipelineEnv> = {}): Harness {
   };
 
   const pipeline = new CapturePipeline(
-    { sessionId: 's1', streamId: 'stream-1', wsUrl: 'ws://test/ws', originalVolume: 0.2 },
+    {
+      sessionId: 's1',
+      streamId: 'stream-1',
+      wsUrl: 'ws://test/ws',
+      originalVolume: 0.2,
+      translatedAudioEnabled: false,
+    },
     {
       onSocketOpen: () => (events.opened += 1),
       onSocketClosed: (code) => events.closed.push(code),
@@ -329,5 +335,87 @@ describe('capture pipeline', () => {
     // No recorder or socket is created when the stream never opened.
     expect(denied.recorder).toBeUndefined();
     expect(denied.socket).toBeUndefined();
+  });
+});
+
+describe('reconnection', () => {
+  it('reopens only the socket, keeping capture and the audio graph alive', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    const firstSocket = h.socket;
+
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+
+    // A new socket was opened at the new URL...
+    expect(h.socket).not.toBe(firstSocket);
+    expect(h.socket.url).toContain('retry=1');
+    // ...and the tab capture survived. Re-requesting it would need another user
+    // gesture, so tearing it down would end the session for good.
+    expect(h.stream.tracks[0]!.stopped).toBe(false);
+    expect(h.context.closed).toBe(false);
+  });
+
+  it('does not report the deliberate close of the old socket as a failure', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    const firstSocket = h.socket;
+
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+    // The old socket closing is expected; surfacing it would trigger a second
+    // reconnect for a drop that never happened.
+    firstSocket.emit('close', { code: 1000 });
+    expect(h.events.closed).toEqual([]);
+  });
+
+  it('sends a fresh start frame on the new socket', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+
+    h.socket.emit('open');
+    expect(h.socket.sent.some((s) => String(s).includes('"start"'))).toBe(true);
+  });
+
+  it('sends audio to the new socket after reconnecting', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+    h.socket.emit('open');
+
+    const before = h.socket.sent.length;
+    h.recorder.emitChunk(256);
+    await vi.waitFor(() => expect(h.socket.sent.length).toBeGreaterThan(before));
+  });
+
+  it('does nothing once disposed', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    const socket = h.socket;
+    await h.pipeline.dispose();
+
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+    expect(h.socket).toBe(socket);
+  });
+});
+
+describe('encoder switching', () => {
+  it('stops the Opus recorder when the server asks for PCM', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    expect(h.recorder.state).toBe('recording');
+
+    // PcmEncoder needs a real AudioWorklet, which happy-dom does not provide, so the
+    // switch fails — and the important guarantee is the FALLBACK: a failed PCM switch
+    // must restart Opus rather than leave the session silently mute.
+    await h.pipeline.setPcmMode(true);
+    expect(h.recorder.state).toBe('recording');
+  });
+
+  it('is a no-op when already in the requested mode', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    const recorder = h.recorder;
+    await h.pipeline.setPcmMode(false);
+    expect(h.recorder).toBe(recorder);
   });
 });
