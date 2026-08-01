@@ -66,6 +66,12 @@ jobs:
       - name: Install Chromium
         run: bunx playwright install chromium --with-deps
 
+      # extension.spec.ts loads dist/ but does not build it (pipeline.spec.ts builds its
+      # own against a fake backend). On a fresh runner dist/ does not exist, so the
+      # build must be explicit here rather than inherited from a developer's machine.
+      - name: Build
+        run: bun run build
+
       # Extensions need a headed browser; xvfb provides a display on the runner.
       - name: End-to-end tests
         run: xvfb-run --auto-servernum bunx playwright test

@@ -6,9 +6,10 @@
  * measure latency. Those live in docs/manual-testing.md, because a green suite that
  * silently skips the hard parts is worse than an honest gap.
  *
- * Requires `bun run build` first.
+ * Builds the extension if `dist/` is missing, so it is self-sufficient on a clean runner.
  */
 
+import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,14 +17,21 @@ import { chromium, expect, test, type BrowserContext } from '@playwright/test';
 
 // This file is ESM, so `__dirname` does not exist — derive it from import.meta.url.
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DIST = resolve(HERE, '../../dist');
+const ROOT = resolve(HERE, '../..');
+const DIST = resolve(ROOT, 'dist');
 
 let context: BrowserContext;
 let extensionId: string;
 
 test.beforeAll(async () => {
+  // Build if needed rather than assuming a developer already did. A test that depends
+  // on a build it does not create passes locally and fails on a clean CI runner — which
+  // is exactly what happened the first time this workflow ran.
   if (!existsSync(resolve(DIST, 'manifest.json'))) {
-    throw new Error('dist/manifest.json missing — run `bun run build` before the e2e suite.');
+    execSync('bun run build', { cwd: ROOT, stdio: 'pipe' });
+  }
+  if (!existsSync(resolve(DIST, 'manifest.json'))) {
+    throw new Error('build produced no dist/manifest.json');
   }
 
   context = await chromium.launchPersistentContext('', {
