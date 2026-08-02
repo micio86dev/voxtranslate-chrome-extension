@@ -69,7 +69,11 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // An empty catch is how errors get swallowed; require a stated reason.
       'no-empty': ['error', { allowEmptyCatch: false }],
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
+      // `info`/`debug` are allowed because the extension has no other way to be
+      // diagnosed in the field: a user cannot attach a debugger to a service worker for
+      // us, but they can copy a console. `log` stays banned so stray debugging does not
+      // ship. Never log transcript text, tokens, audio, or page URLs — see shared/errors.
+      'no-console': ['warn', { allow: ['warn', 'error', 'info', 'debug'] }],
       eqeqeq: ['error', 'always'],
     },
   },

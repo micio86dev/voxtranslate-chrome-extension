@@ -356,6 +356,7 @@ async function startSession(): Promise<void> {
 async function injectOverlay(tabId: number): Promise<void> {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/overlay.js'] });
+    console.info('[voxtranslate] overlay injected on tab', tabId);
     await sendToTab(tabId, {
       kind: 'OVERLAY_SHOW',
       options: {
@@ -367,15 +368,34 @@ async function injectOverlay(tabId: number): Promise<void> {
   } catch (cause) {
     // A page that forbids injection (chrome://, the Web Store) still gets audio
     // translation — only the on-page overlay is unavailable. Not fatal.
-    console.warn('[voxtranslate] overlay injection unavailable', cause);
+    console.warn(
+      '[voxtranslate] overlay injection FAILED on tab',
+      tabId,
+      '— audio still translates, but no subtitles will show:',
+      String(cause),
+    );
   }
 }
 
+/** Overlay commands are best-effort, but a failure must be VISIBLE. */
+let overlayUnreachableLogged = false;
 async function sendToTab(tabId: number, command: OverlayCommand): Promise<void> {
   try {
     await chrome.tabs.sendMessage(tabId, command);
-  } catch {
-    // The tab navigated or closed; the session teardown path handles it.
+    overlayUnreachableLogged = false;
+  } catch (cause) {
+    // Swallowing this silently is how subtitles "just don't appear" with no clue why:
+    // if the content script never installed, every update vanishes here. Logged once
+    // per outage so a navigating tab cannot flood the console.
+    if (!overlayUnreachableLogged) {
+      overlayUnreachableLogged = true;
+      console.warn(
+        '[voxtranslate] overlay unreachable on tab',
+        tabId,
+        '— subtitles will not render:',
+        String(cause),
+      );
+    }
   }
 }
 
@@ -494,6 +514,9 @@ function handleServerFrame(sessionId: string, raw: string): void {
     return;
   }
   const message = parsed.message;
+  // Frame TYPES only — never the transcript text, which must not reach logs. Without
+  // this there is no way to tell "the server sent nothing" from "we dropped it".
+  console.debug('[voxtranslate] frame:', message.type);
 
   switch (message.type) {
     case 'subtitle_interim': {
