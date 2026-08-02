@@ -137,6 +137,17 @@ test('renders the synced account in the side panel', async () => {
   await expect(panel.locator('select').first()).toContainText('Standard');
 });
 
+test('hides tiers the extension cannot deliver, and marks the ones that speak', async () => {
+  const options = await panel.locator('select').first().locator('option').allTextContents();
+  const text = options.join(' | ');
+  // A client_direct tier runs the provider in the browser; an extension session silently
+  // falls back to the default, so offering it would be a lie.
+  expect(text).not.toMatch(/Enhanced/);
+  expect(text).toMatch(/Standard/);
+  // Standard does not speak, so it must not carry the marker.
+  expect(text).not.toMatch(/Standard[^|]*speaks/);
+});
+
 test('offers only languages the selected tier can produce', async () => {
   const options = await panel.locator('select').nth(2).locator('option').allTextContents();
   expect(options.length).toBeGreaterThan(0);

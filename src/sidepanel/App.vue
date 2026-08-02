@@ -25,8 +25,20 @@ const isBusy = computed(() =>
 );
 const loggedIn = computed(() => state.value.account !== null);
 
+/**
+ * Tiers this extension can actually deliver.
+ *
+ * A `client_direct` tier (Cartesia "Enhanced") runs the provider in the BROWSER — the
+ * server never produces its audio, so an extension session silently falls back to the
+ * default engine. Offering it here would let the user pick a tier and quietly get a
+ * different one, which is worse than not offering it.
+ */
+const usableEngines = computed(() =>
+  (state.value.account?.engines ?? []).filter((e) => !e.capabilities.client_direct),
+);
+
 const selectedEngine = computed(() =>
-  state.value.account?.engines.find((e) => e.id === state.value.preferences.engineId),
+  usableEngines.value.find((e) => e.id === state.value.preferences.engineId),
 );
 
 /** Only offer languages the selected tier can actually produce. */
@@ -139,12 +151,10 @@ function openBuyCredits(): void {
               })
             "
           >
-            <option
-              v-for="engine in state.account?.engines ?? []"
-              :key="engine.id"
-              :value="engine.id"
-            >
-              {{ engine.display_name }} — ${{ engine.rate_per_minute.toFixed(3) }}/min
+            <option v-for="engine in usableEngines" :key="engine.id" :value="engine.id">
+              {{ engine.display_name }} — ${{ engine.rate_per_minute.toFixed(3) }}/min{{
+                engine.capabilities.translated_audio ? ' · speaks' : ''
+              }}
             </option>
           </select>
         </label>

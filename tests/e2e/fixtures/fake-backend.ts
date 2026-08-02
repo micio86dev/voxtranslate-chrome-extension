@@ -129,6 +129,23 @@ export async function startFakeBackend(): Promise<FakeBackend> {
               max_room_size: 4,
             },
           },
+          {
+            // A client-direct tier: the extension must NOT offer it, because the server
+            // silently falls back to the default for these.
+            id: 'cartesia',
+            display_name: 'Enhanced',
+            tier: 'enhanced',
+            description: 'Client-direct',
+            rate_per_minute: 0.066,
+            input_languages: ['en', 'it'],
+            output_languages: ['en', 'it'],
+            capabilities: {
+              translated_audio: false,
+              cost_scales_per_language: false,
+              client_direct: true,
+              max_room_size: 4,
+            },
+          },
         ],
         flags: {},
       });
