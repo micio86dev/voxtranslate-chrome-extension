@@ -64,6 +64,17 @@ interface Runtime {
   /** Stream id of the live capture, so a reconnect never re-requests tabCapture. */
   streamId: string | null;
   /**
+   * Captured at session start rather than read live.
+   *
+   * It decides where a partial goes, and reading it from the account each time meant a
+   * woken worker whose account had not re-synced yet would route captions as if the tier
+   * were Standard — mid-session, invisibly.
+   */
+  sessionTierSpeaks: boolean;
+  /** Timestamp of the last caption, to notice captions stopping while audio continues. */
+  lastCaptionAt: number;
+  captionsPaused: boolean;
+  /**
    * The tab the user last invoked the extension on, i.e. the only tab `activeTab` — and
    * therefore `tabCapture` — is granted for. Chrome offers no way to query the grant, so
    * we track the gesture ourselves in order to give an accurate error instead of a bare
@@ -85,6 +96,9 @@ const runtime: Runtime = {
   capturedTabId: null,
   tabTitle: null,
   streamId: null,
+  sessionTierSpeaks: false,
+  lastCaptionAt: 0,
+  captionsPaused: false,
   grantedTabId: null,
   reconnect: { attempt: 0, startedAt: 0, timer: null },
   translatedAudioActive: false,
@@ -214,6 +228,11 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
 function tierSpeaks(): boolean {
   const engine = runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId);
   return engine?.capabilities.translated_audio === true;
+}
+
+/** The tier's behaviour for THIS session — pinned at start, see `sessionTierSpeaks`. */
+function sessionSpeaks(): boolean {
+  return runtime.sessionTierSpeaks;
 }
 
 function effectiveGain(): number {
@@ -382,6 +401,9 @@ async function startSession(): Promise<void> {
   }
 
   runtime.streamId = streamId;
+  runtime.sessionTierSpeaks = tierSpeaks();
+  runtime.lastCaptionAt = Date.now();
+  runtime.captionsPaused = false;
   dispatch({ type: 'CAPTURE_GRANTED' });
 
   if (runtime.preferences.subtitlesEnabled) await injectOverlay(tab.id);
@@ -586,7 +608,8 @@ function handleServerFrame(sessionId: string, raw: string): void {
       // So the engine we picked decides where a partial goes. Getting this wrong on the
       // speech tiers meant discarding the live caption entirely and showing only the
       // finals — most of the text never appeared.
-      if (tierSpeaks()) {
+      noteCaption();
+      if (sessionSpeaks()) {
         void renderSubtitle({ main: message.text });
       } else if (runtime.preferences.dualLanguageSubtitles) {
         void renderSubtitle({ secondary: message.text });
@@ -595,6 +618,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
     }
     case 'subtitle_final': {
       if (!('original' in message)) break;
+      noteCaption();
       const target = runtime.preferences.targetLanguage;
       const translated = message.translations[target] ?? null;
 
@@ -614,7 +638,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
       // blank) — the client then shows the original source line". Same in bypass, where
       // the speaker already uses this language. In both cases the original IS the
       // subtitle, so it belongs on the main line.
-      if (runtime.languageMode.mode === 'bypassed' || tierSpeaks()) {
+      if (runtime.languageMode.mode === 'bypassed' || sessionSpeaks()) {
         void renderSubtitle({ main: message.original, secondary: null });
       } else {
         console.debug('[voxtranslate] no translation for', target, '— showing original dimmed');
@@ -674,6 +698,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
     }
     case 'translated_audio': {
       if (!('pcm16_b64' in message)) break;
+      noticeCaptionsStopped();
       if (!runtime.preferences.translatedAudioEnabled) break;
       // In bypass there is nothing to translate, so any speech still in flight belongs
       // to a moment that has passed — playing it over the original is worse than a gap.
@@ -739,6 +764,34 @@ function stopSpeaking(): void {
     runtime.translatedAudioActive = false;
     pushVolume();
   }
+}
+
+/** A caption arrived: clear any "captions paused" notice. */
+function noteCaption(): void {
+  runtime.lastCaptionAt = Date.now();
+  if (runtime.captionsPaused) {
+    runtime.captionsPaused = false;
+    void showOverlayStatus(null);
+  }
+}
+
+/**
+ * Audio is still arriving but captions have stopped.
+ *
+ * The speech-to-speech models emit their transcript and their audio as SEPARATE upstream
+ * streams, and gpt-realtime-translate is documented to ship an empty output transcript
+ * intermittently — the voice keeps going, the captions do not. Leaving the last line on
+ * screen makes it look current when it is minutes old, so it is cleared and the reason is
+ * shown. A stale subtitle is worse than none: it asserts something untrue.
+ */
+const CAPTIONS_STALL_MS = 8_000;
+function noticeCaptionsStopped(): void {
+  if (runtime.captionsPaused || !runtime.preferences.subtitlesEnabled) return;
+  if (Date.now() - runtime.lastCaptionAt < CAPTIONS_STALL_MS) return;
+  runtime.captionsPaused = true;
+  console.warn('[voxtranslate] captions stalled while audio continues (upstream transcript gap)');
+  void renderSubtitle({ main: null, secondary: null });
+  void showOverlayStatus('Voice only — this tier stopped sending captions');
 }
 
 function applyAudioMode(): void {
