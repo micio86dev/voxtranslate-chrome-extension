@@ -123,3 +123,13 @@ test('the built content script declares nothing in the shared scope', () => {
   // A bare top-level `const`/`let` would reintroduce the redeclaration crash.
   expect(script).not.toMatch(/^\s*(const|let)\s/m);
 });
+
+test('the overlay can be restyled without rebuilding it', async () => {
+  // Size and position are CSS custom properties on the host precisely so a running
+  // overlay can be restyled — needing a session restart to see a slider take effect is
+  // the opposite of how anyone finds a readable size.
+  const script = readFileSync(resolve(DIST, 'content/overlay.js'), 'utf8');
+  expect(script).toMatch(/--vox-font-size/);
+  expect(script).toMatch(/--vox-bottom/);
+  expect(script).toMatch(/OVERLAY_STYLE/);
+});

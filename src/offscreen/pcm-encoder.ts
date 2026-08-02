@@ -71,6 +71,13 @@ export class PcmEncoder {
       this.sink = this.context.createGain();
       this.sink.gain.value = 0;
       this.source.connect(this.node).connect(this.sink).connect(this.context.destination);
+
+      // An AudioContext can be created `suspended`, and a suspended graph never pulls the
+      // worklet — which means not one PCM sample is ever produced and the session goes
+      // quiet with no error at all. Cheap to ask, expensive to miss.
+      if (this.context.state === 'suspended') {
+        await this.context.resume();
+      }
       return true;
     } catch (cause) {
       this.callbacks.onError(String(cause));

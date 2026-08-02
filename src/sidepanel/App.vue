@@ -257,7 +257,6 @@ function openBuyCredits(): void {
             "
           />
         </label>
-        <p v-if="isActive" class="fine">Subtitle size and position apply to the next session.</p>
 
         <label class="field">
           <span

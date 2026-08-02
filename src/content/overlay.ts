@@ -30,6 +30,8 @@ interface OverlayHandle {
   show(options: OverlayOptions): void;
   /** Omitted = leave that line alone; explicit null = clear it. */
   update(main: string | null | undefined, secondary: string | null | undefined): void;
+  /** Restyle a LIVE overlay — size and position change without restarting the session. */
+  restyle(options: OverlayOptions): void;
   status(text: string | null): void;
   hide(): void;
 }
@@ -53,6 +55,14 @@ function createOverlay(): OverlayHandle {
     if (host.parentElement !== target) target.appendChild(host);
   }
 
+  /** Push the adjustable values into the host's custom properties. */
+  function applyStyleVars(options: OverlayOptions): void {
+    if (!host) return;
+    host.style.setProperty('--vox-font-size', `${options.fontSize}px`);
+    host.style.setProperty('--vox-original-size', `${Math.round(options.fontSize * 0.86)}px`);
+    host.style.setProperty('--vox-bottom', `${options.bottomOffset}px`);
+  }
+
   function build(options: OverlayOptions): void {
     host = document.createElement('div');
     host.id = HOST_ID;
@@ -62,6 +72,9 @@ function createOverlay(): OverlayHandle {
     // High, but not 2147483647: leaving headroom lets a site's own modal still win,
     // which is the polite behaviour and avoids covering cookie/consent dialogs.
     host.style.zIndex = '2147483000';
+    // Size and position live in custom properties so they can be changed on a running
+    // overlay by setting two values, instead of rebuilding the stylesheet.
+    applyStyleVars(options);
 
     shadow = host.attachShadow({ mode: 'closed' });
 
@@ -72,7 +85,7 @@ function createOverlay(): OverlayHandle {
         position: absolute;
         left: 50%;
         transform: translateX(-50%);
-        bottom: ${options.bottomOffset}px;
+        bottom: var(--vox-bottom, 80px);
         max-width: min(90vw, 1100px);
         display: flex;
         flex-direction: column;
@@ -100,13 +113,13 @@ function createOverlay(): OverlayHandle {
         line-height: 1.35;
         overflow-wrap: anywhere;
       }
-      .line { font-size: ${options.fontSize}px; font-weight: 600; }
+      .line { font-size: var(--vox-font-size, 22px); font-weight: 600; }
       /* The original has to stay READABLE, not decorative: it is a second subtitle, and
          at 78% size and 78% opacity over moving video it was not. Slightly smaller than
          the translation and tinted, so the two are told apart by hue rather than by
          being hard to see. */
       .original {
-        font-size: ${Math.round(options.fontSize * 0.86)}px;
+        font-size: var(--vox-original-size, 19px);
         color: #d7e3ff;
         opacity: 0.95;
         font-weight: 500;
@@ -167,6 +180,10 @@ function createOverlay(): OverlayHandle {
       }, IDLE_CLEAR_MS);
     },
 
+    restyle(options) {
+      applyStyleVars(options);
+    },
+
     status(text) {
       if (!statusLine) return;
       statusLine.textContent = text ?? '';
@@ -205,6 +222,9 @@ if (!globalScope[GUARD]) {
         break;
       case 'OVERLAY_UPDATE':
         overlay.update(message.main, message.secondary);
+        break;
+      case 'OVERLAY_STYLE':
+        overlay.restyle(message.options);
         break;
       case 'OVERLAY_STATUS':
         overlay.status(message.text);

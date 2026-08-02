@@ -156,6 +156,8 @@ export type OverlayCommand =
    * translated line as it is" — it would blank the main line on every partial.
    */
   | { kind: 'OVERLAY_UPDATE'; main?: string | null; secondary?: string | null }
+  /** Restyle a LIVE overlay: size and position must not need a session restart. */
+  | { kind: 'OVERLAY_STYLE'; options: OverlayOptions }
   | { kind: 'OVERLAY_STATUS'; text: string | null }
   | { kind: 'OVERLAY_HIDE' };
 

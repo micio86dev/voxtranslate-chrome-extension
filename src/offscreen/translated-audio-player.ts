@@ -81,6 +81,10 @@ export class TranslatedAudioPlayer {
       this.gain = this.context.createGain();
       this.gain.gain.value = 1;
       this.node.connect(this.gain).connect(this.context.destination);
+      // Same trap as the capture context: a suspended graph plays nothing, silently.
+      if (this.context.state === 'suspended') {
+        await this.context.resume();
+      }
       return true;
     } catch (cause) {
       this.callbacks.onDegraded(String(cause));

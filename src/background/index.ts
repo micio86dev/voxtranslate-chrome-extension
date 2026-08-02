@@ -160,6 +160,20 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
 
   if (patch.originalAudioVolume !== undefined) pushVolume();
 
+  // Appearance changes apply to the RUNNING overlay. Making the user stop and restart a
+  // session to read a slider's effect is the opposite of how you find the right size.
+  if (
+    (patch.subtitleFontSize !== undefined || patch.subtitleBottomOffset !== undefined) &&
+    runtime.capturedTabId !== null
+  ) {
+    void sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_STYLE', options: overlayOptions() });
+  }
+
+  // Turning subtitles off mid-session must clear what is on screen, not freeze it there.
+  if (patch.subtitlesEnabled === false && runtime.capturedTabId !== null) {
+    void sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_UPDATE', main: null, secondary: null });
+  }
+
   // A language change must reach the SERVER, not just local storage: it decides which
   // languages to translate into. Without this the session keeps producing the old one
   // and the user has to stop and start to see any effect.
@@ -390,18 +404,20 @@ async function startSession(): Promise<void> {
   });
 }
 
+/** The overlay's adjustable appearance, in one place so panel and injection agree. */
+function overlayOptions() {
+  return {
+    fontSize: runtime.preferences.subtitleFontSize,
+    bottomOffset: runtime.preferences.subtitleBottomOffset,
+    dualLanguage: runtime.preferences.dualLanguageSubtitles,
+  };
+}
+
 async function injectOverlay(tabId: number): Promise<void> {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/overlay.js'] });
     console.info('[voxtranslate] overlay injected on tab', tabId);
-    await sendToTab(tabId, {
-      kind: 'OVERLAY_SHOW',
-      options: {
-        fontSize: runtime.preferences.subtitleFontSize,
-        bottomOffset: runtime.preferences.subtitleBottomOffset,
-        dualLanguage: runtime.preferences.dualLanguageSubtitles,
-      },
-    });
+    await sendToTab(tabId, { kind: 'OVERLAY_SHOW', options: overlayOptions() });
   } catch (cause) {
     // A page that forbids injection (chrome://, the Web Store) still gets audio
     // translation — only the on-page overlay is unavailable. Not fatal.

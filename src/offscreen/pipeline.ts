@@ -159,6 +159,10 @@ export class CapturePipeline {
     this.gain.gain.value = this.preferredVolume;
     source.connect(this.gain);
     this.gain.connect(this.context.destination);
+    // A suspended passthrough graph means the captured tab goes SILENT for the user.
+    if (this.context.state === 'suspended') {
+      void this.context.resume();
+    }
   }
 
   /** Attach handlers to a socket. Shared by the initial connect and every reconnect. */
