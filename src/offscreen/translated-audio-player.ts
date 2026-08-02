@@ -23,6 +23,17 @@ const PROCESSOR_NAME = 'pcm-playback-processor';
 /** Silence for this long with nothing queued counts as "no longer speaking". */
 const IDLE_AFTER_MS = 400;
 
+/**
+ * Drop the buffer once playback is this far behind the audio we have queued.
+ *
+ * The worklet's FIFO is unbounded. On a continuous source — a video, rather than the
+ * bursty turn-taking of a call — the network can deliver slightly faster than the audio
+ * clock drains, and the backlog grows monotonically: first latency, then artefacts, then
+ * a rising wash of noise as the buffer churns. Resyncing loses a moment of speech;
+ * drifting loses the rest of the session.
+ */
+const MAX_BACKLOG_SECONDS = 1.5;
+
 export interface PlayerCallbacks {
   /** Fires when translated speech starts or stops, so the caller can duck the original. */
   onActiveChange(active: boolean): void;
@@ -56,6 +67,9 @@ export class TranslatedAudioPlayer {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private active = false;
   private disposed = false;
+  /** Seconds of audio handed to the worklet, and where playback had reached by then. */
+  private queuedSeconds = 0;
+  private queueStartedAt: number | null = null;
 
   constructor(
     sessionId: string,
@@ -77,7 +91,14 @@ export class TranslatedAudioPlayer {
       await this.context.audioWorklet.addModule(this.resolveWorkletUrl(PLAYBACK_WORKLET));
       if (this.disposed) return false;
 
-      this.node = new AudioWorkletNode(this.context, PROCESSOR_NAME);
+      // Explicit topology. A default node has one INPUT and infers its output channel
+      // count from it, which for a source-only processor is neither what we want nor
+      // stable across engines — the worklet writes a single mono channel.
+      this.node = new AudioWorkletNode(this.context, PROCESSOR_NAME, {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
       this.gain = this.context.createGain();
       this.gain.gain.value = 1;
       this.node.connect(this.gain).connect(this.context.destination);
@@ -113,6 +134,26 @@ export class TranslatedAudioPlayer {
         continue;
       }
       if (samples.length === 0) continue;
+
+      // Track the backlog: how much audio we have handed over versus how much wall time
+      // has passed since playback began.
+      const now = this.context?.currentTime ?? 0;
+      if (this.queueStartedAt === null) {
+        this.queueStartedAt = now;
+        this.queuedSeconds = 0;
+      }
+      this.queuedSeconds += samples.length / TRANSLATED_SAMPLE_RATE;
+      const played = now - this.queueStartedAt;
+
+      if (this.queuedSeconds - played > MAX_BACKLOG_SECONDS) {
+        // We are falling behind and will never catch up on our own. Resync rather than
+        // let the delay — and the artefacts that come with it — keep growing.
+        console.warn('[voxtranslate] translated audio fell behind; resyncing');
+        this.node.port.postMessage('flush');
+        this.queueStartedAt = now;
+        this.queuedSeconds = samples.length / TRANSLATED_SAMPLE_RATE;
+      }
+
       this.node.port.postMessage(samples);
     }
 
@@ -143,6 +184,8 @@ export class TranslatedAudioPlayer {
   flush(): void {
     this.queue.cancel();
     this.node?.port.postMessage('flush');
+    this.queueStartedAt = null;
+    this.queuedSeconds = 0;
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;

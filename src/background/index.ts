@@ -607,11 +607,14 @@ function handleServerFrame(sessionId: string, raw: string): void {
         break;
       }
 
-      // No translation for the target. In bypass that is correct and expected — the
-      // speaker is already using this language — so show the text plainly. Otherwise it
-      // means the server has not caught up with a language change; keep the original off
-      // the MAIN line (that is the mix again) and show it dimmed as what it is.
-      if (runtime.languageMode.mode === 'bypassed') {
+      // No usable translation for the target.
+      //
+      // On a speech tier that is an EXPECTED outcome, not a language mismatch: pro.rs
+      // says so outright — "translated may be empty (upstream AND the Groq fallback both
+      // blank) — the client then shows the original source line". Same in bypass, where
+      // the speaker already uses this language. In both cases the original IS the
+      // subtitle, so it belongs on the main line.
+      if (runtime.languageMode.mode === 'bypassed' || tierSpeaks()) {
         void renderSubtitle({ main: message.original, secondary: null });
       } else {
         console.debug('[voxtranslate] no translation for', target, '— showing original dimmed');
