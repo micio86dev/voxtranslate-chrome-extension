@@ -227,6 +227,38 @@ function openBuyCredits(): void {
           marked “natural voice” are spoken by the translation model itself.
         </p>
 
+        <label v-if="state.preferences.subtitlesEnabled" class="field">
+          <span>Subtitle size — {{ state.preferences.subtitleFontSize }}px</span>
+          <input
+            type="range"
+            min="14"
+            max="40"
+            :value="state.preferences.subtitleFontSize"
+            @input="
+              session.updatePreferences({
+                subtitleFontSize: Number(($event.target as HTMLInputElement).value),
+              })
+            "
+          />
+        </label>
+
+        <label v-if="state.preferences.subtitlesEnabled" class="field">
+          <span>Distance from the bottom — {{ state.preferences.subtitleBottomOffset }}px</span>
+          <input
+            type="range"
+            min="20"
+            max="320"
+            step="10"
+            :value="state.preferences.subtitleBottomOffset"
+            @input="
+              session.updatePreferences({
+                subtitleBottomOffset: Number(($event.target as HTMLInputElement).value),
+              })
+            "
+          />
+        </label>
+        <p v-if="isActive" class="fine">Subtitle size and position apply to the next session.</p>
+
         <label class="field">
           <span
             >Original audio volume —

@@ -17,6 +17,15 @@ import type { OverlayCommand, OverlayOptions } from '@/shared/messaging';
 const HOST_ID = 'voxtranslate-subtitle-host';
 const GUARD = '__voxtranslateOverlayInstalled';
 
+/**
+ * Clear the lines after this long with nothing new.
+ *
+ * Without it the last thing said stays burned onto the video indefinitely — during a
+ * pause, a silent passage, or after the session ends badly. Long enough that a normal
+ * gap between sentences does not blink the text away.
+ */
+const IDLE_CLEAR_MS = 7_000;
+
 interface OverlayHandle {
   show(options: OverlayOptions): void;
   /** Omitted = leave that line alone; explicit null = clear it. */
@@ -32,6 +41,7 @@ function createOverlay(): OverlayHandle {
   let originalLine: HTMLDivElement | null = null;
   let statusLine: HTMLDivElement | null = null;
   let fullscreenListener: (() => void) | null = null;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Keep the overlay inside whatever element is currently fullscreen. Without this the
@@ -72,6 +82,13 @@ function createOverlay(): OverlayHandle {
         text-align: center;
         pointer-events: none;
       }
+      /* A very long segment must not cover the video. Clamp instead of growing. */
+      .line, .original {
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
       .line, .original, .status {
         /* A translucent plate plus a text shadow keeps the text readable over both
            bright and dark video without a heavy opaque box. */
@@ -84,7 +101,16 @@ function createOverlay(): OverlayHandle {
         overflow-wrap: anywhere;
       }
       .line { font-size: ${options.fontSize}px; font-weight: 600; }
-      .original { font-size: ${Math.round(options.fontSize * 0.78)}px; opacity: 0.78; font-weight: 400; }
+      /* The original has to stay READABLE, not decorative: it is a second subtitle, and
+         at 78% size and 78% opacity over moving video it was not. Slightly smaller than
+         the translation and tinted, so the two are told apart by hue rather than by
+         being hard to see. */
+      .original {
+        font-size: ${Math.round(options.fontSize * 0.86)}px;
+        color: #d7e3ff;
+        opacity: 0.95;
+        font-weight: 500;
+      }
       .status { font-size: 13px; opacity: 0.85; font-weight: 500; }
       .hidden { display: none; }
       /* Partials fade in so text does not pop; finals replace them in place, which is
@@ -130,6 +156,15 @@ function createOverlay(): OverlayHandle {
         originalLine.textContent = secondary ?? '';
         originalLine.classList.toggle('hidden', !secondary);
       }
+
+      // Restart the idle countdown: subtitles should fade out of the way during a pause
+      // rather than leaving the last sentence sitting on the picture.
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimer = null;
+        line?.classList.add('hidden');
+        originalLine?.classList.add('hidden');
+      }, IDLE_CLEAR_MS);
     },
 
     status(text) {
@@ -139,6 +174,10 @@ function createOverlay(): OverlayHandle {
     },
 
     hide() {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
       if (fullscreenListener) {
         document.removeEventListener('fullscreenchange', fullscreenListener);
         fullscreenListener = null;
