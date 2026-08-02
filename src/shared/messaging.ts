@@ -118,7 +118,13 @@ export type OffscreenCommand =
   /** One validated translated-audio frame, already checked at the network boundary. */
   | { kind: 'PLAY_TRANSLATED_AUDIO'; sessionId: string; seq: number; pcm16_b64: string }
   /** Drop pending speech — stop, reconnect, or the language bypass engaging. */
-  | { kind: 'FLUSH_TRANSLATED_AUDIO'; sessionId: string };
+  | { kind: 'FLUSH_TRANSLATED_AUDIO'; sessionId: string }
+  /**
+   * Retarget a LIVE session. The server fans out translations to the languages present
+   * in the room, so changing the target locally is not enough — it has to be told, or
+   * it keeps producing the old language and the client finds nothing to render.
+   */
+  | { kind: 'SET_TARGET_LANG'; sessionId: string; lang: string };
 
 export type OffscreenEvent =
   | { kind: 'CAPTURE_STARTED'; sessionId: string }
@@ -133,12 +139,14 @@ export type OffscreenEvent =
 
 export type OverlayCommand =
   | { kind: 'OVERLAY_SHOW'; options: OverlayOptions }
-  | {
-      kind: 'OVERLAY_UPDATE';
-      partial: string | null;
-      final: string | null;
-      original: string | null;
-    }
+  /**
+   * Update the overlay's two lines INDEPENDENTLY.
+   *
+   * An omitted field leaves that line untouched; an explicit `null` clears it. A single
+   * "here is the whole state" payload cannot express "a new partial arrived, keep the
+   * translated line as it is" — it would blank the main line on every partial.
+   */
+  | { kind: 'OVERLAY_UPDATE'; main?: string | null; secondary?: string | null }
   | { kind: 'OVERLAY_STATUS'; text: string | null }
   | { kind: 'OVERLAY_HIDE' };
 

@@ -331,6 +331,19 @@ export class CapturePipeline {
     this.player?.flush();
   }
 
+  /**
+   * Tell the server this listener now wants a different language.
+   *
+   * Without this the room's target set never changes, the server keeps translating into
+   * the old language, and the client's lookup for the new one comes back empty — which
+   * renders as the untranslated original.
+   */
+  setTargetLanguage(lang: string): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WS_OPEN) return;
+    socket.send(JSON.stringify({ type: 'set_lang', lang }));
+  }
+
   setOriginalVolume(volume: number): void {
     this.preferredVolume = Math.min(1, Math.max(0, volume));
     this.applyGain();

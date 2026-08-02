@@ -160,6 +160,22 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
 
   if (patch.originalAudioVolume !== undefined) pushVolume();
 
+  // A language change must reach the SERVER, not just local storage: it decides which
+  // languages to translate into. Without this the session keeps producing the old one
+  // and the user has to stop and start to see any effect.
+  if (patch.targetLanguage && runtime.session.sessionId) {
+    void chrome.runtime.sendMessage({
+      kind: 'SET_TARGET_LANG',
+      sessionId: runtime.session.sessionId,
+      lang: patch.targetLanguage,
+    });
+    // The in-flight speech belongs to the previous language.
+    void chrome.runtime.sendMessage({
+      kind: 'FLUSH_TRANSLATED_AUDIO',
+      sessionId: runtime.session.sessionId,
+    });
+  }
+
   if (patch.translatedAudioEnabled !== undefined && runtime.session.sessionId) {
     void chrome.runtime.sendMessage({
       kind: 'SET_TRANSLATED_AUDIO',
@@ -521,18 +537,42 @@ function handleServerFrame(sessionId: string, raw: string): void {
   switch (message.type) {
     case 'subtitle_interim': {
       if (!('text' in message)) break;
-      void renderSubtitle(message.text, null, null);
+      // Partials arrive UNTRANSLATED — the server sends the raw transcript in the
+      // SOURCE language by design. Putting them on the main line is what produced
+      // "subtitles in a mix of Italian and Spanish": every partial flashed Spanish
+      // before the final replaced it with Italian.
+      //
+      // So a partial only ever reaches the secondary line, and only when the user asked
+      // to see the original too. Otherwise it is dropped: the promise is subtitles in
+      // YOUR language, and a foreign partial does not keep it.
+      if (runtime.preferences.dualLanguageSubtitles) {
+        void renderSubtitle({ secondary: message.text });
+      }
       break;
     }
     case 'subtitle_final': {
       if (!('original' in message)) break;
       const target = runtime.preferences.targetLanguage;
       const translated = message.translations[target] ?? null;
-      void renderSubtitle(
-        null,
-        translated ?? message.original,
-        runtime.preferences.dualLanguageSubtitles && translated ? message.original : null,
-      );
+
+      if (translated) {
+        void renderSubtitle({
+          main: translated,
+          secondary: runtime.preferences.dualLanguageSubtitles ? message.original : null,
+        });
+        break;
+      }
+
+      // No translation for the target. In bypass that is correct and expected — the
+      // speaker is already using this language — so show the text plainly. Otherwise it
+      // means the server has not caught up with a language change; keep the original off
+      // the MAIN line (that is the mix again) and show it dimmed as what it is.
+      if (runtime.languageMode.mode === 'bypassed') {
+        void renderSubtitle({ main: message.original, secondary: null });
+      } else {
+        console.debug('[voxtranslate] no translation for', target, '— showing original dimmed');
+        void renderSubtitle({ main: null, secondary: message.original });
+      }
       break;
     }
     case 'language_detected': {
@@ -635,13 +675,13 @@ function applyAudioMode(): void {
   }
 }
 
-async function renderSubtitle(
-  partial: string | null,
-  final: string | null,
-  original: string | null,
-): Promise<void> {
+/** Update the overlay's lines. An omitted argument leaves that line untouched. */
+async function renderSubtitle(update: {
+  main?: string | null;
+  secondary?: string | null;
+}): Promise<void> {
   if (!runtime.preferences.subtitlesEnabled || runtime.capturedTabId === null) return;
-  await sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_UPDATE', partial, final, original });
+  await sendToTab(runtime.capturedTabId, { kind: 'OVERLAY_UPDATE', ...update });
 }
 
 // --- boot ------------------------------------------------------------------

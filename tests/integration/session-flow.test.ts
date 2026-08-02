@@ -239,3 +239,91 @@ describe('disconnect and reconnect', () => {
     expect(acceptsEventFrom(h.session, 's1')).toBe(true);
   });
 });
+
+/**
+ * Subtitle language selection.
+ *
+ * Mirrors what the background does per frame. The bug these guard: partials arrive
+ * UNTRANSLATED (the server sends the raw transcript in the source language), and
+ * rendering them on the main line produced subtitles that flickered between the source
+ * and target languages.
+ */
+interface Rendered {
+  main?: string | null;
+  secondary?: string | null;
+}
+
+function renderFrame(
+  raw: string,
+  target: string,
+  opts: { dual: boolean; bypassed: boolean },
+): Rendered | null {
+  const parsed = parseServerMessage(raw);
+  if (!parsed.ok) return null;
+  const m = parsed.message;
+
+  if (m.type === 'subtitle_interim' && 'text' in m) {
+    return opts.dual ? { secondary: m.text } : null;
+  }
+  if (m.type === 'subtitle_final' && 'original' in m) {
+    const translated = m.translations[target] ?? null;
+    if (translated) {
+      return { main: translated, secondary: opts.dual ? m.original : null };
+    }
+    return opts.bypassed
+      ? { main: m.original, secondary: null }
+      : { main: null, secondary: m.original };
+  }
+  return null;
+}
+
+const interim = (text: string, lang: string) =>
+  JSON.stringify({ type: 'subtitle_interim', speaker_id: 't', text, lang });
+const final = (original: string, lang: string, translations: Record<string, string>) =>
+  JSON.stringify({ type: 'subtitle_final', speaker_id: 't', original, lang, translations });
+
+describe('subtitle language', () => {
+  it('never puts an untranslated partial on the main line', () => {
+    // This is the reported "mix of Italian and Spanish": every Spanish partial flashed
+    // on the main line before the Italian final replaced it.
+    const out = renderFrame(interim('hola que tal', 'es'), 'it', { dual: false, bypassed: false });
+    expect(out).toBeNull();
+  });
+
+  it('shows a partial as the ORIGINAL line when dual language is on', () => {
+    const out = renderFrame(interim('hola que tal', 'es'), 'it', { dual: true, bypassed: false });
+    expect(out).toEqual({ secondary: 'hola que tal' });
+    expect(out).not.toHaveProperty('main');
+  });
+
+  it('renders the target translation on the main line', () => {
+    const out = renderFrame(final('hola mundo', 'es', { it: 'ciao mondo' }), 'it', {
+      dual: false,
+      bypassed: false,
+    });
+    expect(out).toEqual({ main: 'ciao mondo', secondary: null });
+  });
+
+  it('keeps the original off the main line when the translation is missing', () => {
+    // Happens right after a language change, before the server retargets. Showing the
+    // source text as if it were the translation is the mix all over again.
+    const out = renderFrame(final('hola mundo', 'es', { en: 'hello world' }), 'it', {
+      dual: false,
+      bypassed: false,
+    });
+    expect(out).toEqual({ main: null, secondary: 'hola mundo' });
+  });
+
+  it('shows the text plainly in bypass, where no translation is expected', () => {
+    const out = renderFrame(final('ciao mondo', 'it', {}), 'it', { dual: false, bypassed: true });
+    expect(out).toEqual({ main: 'ciao mondo', secondary: null });
+  });
+
+  it('shows both lines when dual language is on', () => {
+    const out = renderFrame(final('hola mundo', 'es', { it: 'ciao mondo' }), 'it', {
+      dual: true,
+      bypassed: false,
+    });
+    expect(out).toEqual({ main: 'ciao mondo', secondary: 'hola mundo' });
+  });
+});

@@ -36,6 +36,13 @@ const targetLanguages = computed(() => {
   return allLanguages().filter((l) => !allowed || allowed.has(l.code));
 });
 
+/**
+ * Whether the selected tier produces translated SPEECH. Standard does not — it returns
+ * subtitles only — so offering a live toggle for it would promise something the backend
+ * never sends.
+ */
+const tierSpeaks = computed(() => selectedEngine.value?.capabilities.translated_audio === true);
+
 const remainingMinutes = computed(() => {
   const rate = selectedEngine.value?.rate_per_minute;
   if (rate === undefined || state.value.account === null) return null;
@@ -178,6 +185,37 @@ function openBuyCredits(): void {
           />
           <span>Show subtitles on the page</span>
         </label>
+
+        <label class="toggle">
+          <input
+            type="checkbox"
+            :checked="state.preferences.dualLanguageSubtitles"
+            @change="
+              session.updatePreferences({
+                dualLanguageSubtitles: ($event.target as HTMLInputElement).checked,
+              })
+            "
+          />
+          <span>Also show the original language</span>
+        </label>
+
+        <label class="toggle">
+          <input
+            type="checkbox"
+            :disabled="!tierSpeaks"
+            :checked="state.preferences.translatedAudioEnabled && tierSpeaks"
+            @change="
+              session.updatePreferences({
+                translatedAudioEnabled: ($event.target as HTMLInputElement).checked,
+              })
+            "
+          />
+          <span>Speak the translation</span>
+        </label>
+        <p v-if="!tierSpeaks" class="fine">
+          {{ selectedEngine?.display_name ?? 'This tier' }} produces subtitles only. Choose a tier
+          with translated speech to hear it.
+        </p>
 
         <label class="field">
           <span

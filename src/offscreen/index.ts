@@ -108,6 +108,10 @@ chrome.runtime.onMessage.addListener((message: OffscreenCommand) => {
       if (owns(message.sessionId)) pipeline?.flushTranslatedAudio();
       break;
 
+    case 'SET_TARGET_LANG':
+      if (owns(message.sessionId)) pipeline?.setTargetLanguage(message.lang);
+      break;
+
     default: {
       const exhaustive: never = message;
       return exhaustive;

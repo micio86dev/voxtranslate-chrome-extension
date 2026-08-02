@@ -19,7 +19,8 @@ const GUARD = '__voxtranslateOverlayInstalled';
 
 interface OverlayHandle {
   show(options: OverlayOptions): void;
-  update(partial: string | null, final: string | null, original: string | null): void;
+  /** Omitted = leave that line alone; explicit null = clear it. */
+  update(main: string | null | undefined, secondary: string | null | undefined): void;
   status(text: string | null): void;
   hide(): void;
 }
@@ -117,16 +118,18 @@ function createOverlay(): OverlayHandle {
       }
     },
 
-    update(partial, final, original) {
-      if (!line || !originalLine) return;
-      // A final replaces the partial in place rather than clearing first — clearing
-      // is what produces the visible flicker between segments.
-      const text = final ?? partial;
-      line.textContent = text ?? '';
-      line.classList.toggle('hidden', !text);
-
-      originalLine.textContent = original ?? '';
-      originalLine.classList.toggle('hidden', !original);
+    update(main, secondary) {
+      // Each line is written only when the caller says something about it. New text
+      // replaces old IN PLACE rather than clearing first — clearing is what produces the
+      // visible flicker between segments.
+      if (main !== undefined && line) {
+        line.textContent = main ?? '';
+        line.classList.toggle('hidden', !main);
+      }
+      if (secondary !== undefined && originalLine) {
+        originalLine.textContent = secondary ?? '';
+        originalLine.classList.toggle('hidden', !secondary);
+      }
     },
 
     status(text) {
@@ -162,7 +165,7 @@ if (!globalScope[GUARD]) {
         overlay.show(message.options);
         break;
       case 'OVERLAY_UPDATE':
-        overlay.update(message.partial, message.final, message.original);
+        overlay.update(message.main, message.secondary);
         break;
       case 'OVERLAY_STATUS':
         overlay.status(message.text);
