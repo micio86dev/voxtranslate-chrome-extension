@@ -56,6 +56,17 @@ Record the Chrome version and the build commit with the results.
 
 - [ ] `bun run build`, load `dist/` unpacked, no manifest errors in `chrome://extensions`.
 - [ ] Clicking the toolbar icon opens the side panel.
+
+> **The toolbar click is not decoration.** Chrome grants `activeTab` — and therefore
+> `tabCapture` — only for an action click, context menu item, keyboard shortcut or
+> omnibox pick. **Opening or clicking inside the side panel grants nothing.** So the flow
+> is always: go to the tab you want translated → click the VoxTranslate icon → press
+> Start. Opening the panel from the puzzle-piece menu, or clicking the icon on a
+> different tab, leaves capture denied.
+>
+> The grant is also revoked when the tab navigates to another origin, so after following
+> a link to a different site the icon must be clicked again.
+
 - [ ] Logged-out state shows branding, explanation, login button, privacy summary.
 
 ## 2. Authentication
@@ -71,7 +82,9 @@ Record the Chrome version and the build commit with the results.
 
 On a YouTube video in a foreign language:
 
-- [ ] Press Start. Chrome shows its recording indicator on the tab.
+- [ ] With the panel open but WITHOUT clicking the icon on this tab, press Start: it must
+      refuse with "Click the VoxTranslate icon…", not a bare permission error.
+- [ ] Click the icon on this tab, then press Start. Chrome shows its recording indicator.
 - [ ] **The tab audio is still audible** (this is the failure mode that matters most —
       capture takes over the audio, and if the graph is wrong the tab goes silent).
 - [ ] Panel shows "Translating".
@@ -106,7 +119,8 @@ On a YouTube video in a foreign language:
 - [ ] Reset counter shows the confirmation dialog with the "no refund" wording.
 - [ ] After reset, "since reset" is zero and **remaining is unchanged**.
 - [ ] Billing history in the web app is unchanged by the reset.
-- [ ] "Buy more credit" opens voxtranslate.app with `?source=chrome-extension`.
+- [ ] "Buy more credit" opens voxtranslate.app and the purchase modal appears
+      (`/?buy=1&source=chrome-extension`). There is no `/billing` page — a link there 404s.
 - [ ] Returning to the panel after a purchase shows the new balance.
 
 ## 7. Low and exhausted balance

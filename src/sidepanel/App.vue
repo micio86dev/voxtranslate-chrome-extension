@@ -205,6 +205,10 @@ function openBuyCredits(): void {
           Start translating this tab
         </button>
         <button v-else class="danger" @click="session.stop()">Stop</button>
+        <p v-if="!isActive && state.errorCode === 'capture_needs_gesture'" class="fine">
+          Chrome only lets an extension capture a tab it was opened on — clicking the toolbar icon
+          is what grants that, and it has to be done on the tab you want translated.
+        </p>
       </section>
 
       <!-- Usage -->

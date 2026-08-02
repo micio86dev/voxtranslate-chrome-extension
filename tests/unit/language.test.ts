@@ -91,3 +91,14 @@ describe('tier language catalogue', () => {
     expect(isSupported('definitely-not-a-language')).toBe(false);
   });
 });
+
+describe('buy-credits link', () => {
+  it('deep-links to the app modal, not a non-existent billing page', async () => {
+    const { buyCreditsUrl } = await import('@/shared/config');
+    const url = new URL(buyCreditsUrl());
+    // `/billing` 404s — purchasing is a modal inside the app, opened by `?buy=1`.
+    expect(url.pathname).toBe('/');
+    expect(url.searchParams.get('buy')).toBe('1');
+    expect(url.searchParams.get('source')).toBe('chrome-extension');
+  });
+});

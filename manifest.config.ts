@@ -18,7 +18,10 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
  * - `offscreen`   an MV3 service worker cannot hold an AudioContext or a long-lived
  *                 MediaStream; the offscreen document is the only supported place for a
  *                 continuous capture pipeline.
- * - `sidePanel`   the main UI surface.
+ * - `sidePanel`   the main UI surface. NOTE: the panel cannot grant `activeTab` — only
+ *                 an action click, context menu, keyboard shortcut or omnibox can — so
+ *                 the toolbar click is what authorises capture, and it opens the panel
+ *                 programmatically (see background/index.ts).
  * - `identity`    launchWebAuthFlow for the PKCE login handoff.
  * - `storage`     tokens + a cache of server-owned preferences.
  * - `scripting`   programmatic overlay injection on user gesture (paired with activeTab,
@@ -63,7 +66,11 @@ export function buildManifest(env: {
     },
 
     action: {
-      default_title: 'VoxTranslate',
+      // Deliberately NO `default_popup` and NO `openPanelOnActionClick`: the click must
+      // reach `action.onClicked`, because that is the gesture that grants `activeTab`
+      // for the tab being captured. Letting Chrome open the panel for us would consume
+      // the click and leave capture permanently denied.
+      default_title: 'Translate this tab with VoxTranslate',
       default_icon: {
         '16': 'icons/icon-16.png',
         '32': 'icons/icon-32.png',

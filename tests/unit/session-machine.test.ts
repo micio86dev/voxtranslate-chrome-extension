@@ -178,3 +178,30 @@ describe('session restoration', () => {
     expect(started.context.state).toBe('requesting_capture');
   });
 });
+
+describe('capture gesture requirement', () => {
+  it('treats a missing activeTab gesture as a denial that clears the session', () => {
+    // Chrome grants activeTab (and so tabCapture) only for an action click, context
+    // menu, keyboard shortcut or omnibox pick — never for the side panel. Starting
+    // without that gesture must fail cleanly, not hold a half-open session.
+    const requesting = run(initialContext(true), [{ type: 'START_REQUESTED' }]);
+    const denied = transition(requesting, {
+      type: 'CAPTURE_DENIED',
+      reason: 'capture_needs_gesture',
+    });
+    expect(denied.context.state).toBe('error');
+    expect(denied.context.sessionId).toBeNull();
+    expect(denied.context.error).toBe('capture_needs_gesture');
+  });
+
+  it('allows a retry once the user has performed the gesture', () => {
+    const denied: SessionContext = {
+      state: 'error',
+      sessionId: null,
+      error: 'capture_needs_gesture',
+    };
+    const retried = transition(denied, { type: 'START_REQUESTED' }, 's2');
+    expect(retried.accepted).toBe(true);
+    expect(retried.context.state).toBe('requesting_capture');
+  });
+});

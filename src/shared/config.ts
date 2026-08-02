@@ -15,9 +15,15 @@ export const IS_DEV: boolean = __DEV_BUILD__;
 /** WebSocket origin derived from the API origin, so there is one thing to configure. */
 export const WS_ORIGIN: string = API_ORIGIN.replace(/^http/, 'ws');
 
-/** Where the user goes to top up. `source` is for the existing acquisition attribution. */
+/**
+ * Where the user goes to top up.
+ *
+ * There is no standalone billing page — purchasing is a modal inside the web app — so
+ * this deep-links to the app with `?buy=1`, which the app turns into an open modal.
+ * `source` feeds the existing acquisition attribution.
+ */
 export function buyCreditsUrl(): string {
-  return `${APP_ORIGIN}/billing?source=chrome-extension`;
+  return `${APP_ORIGIN}/?buy=1&source=chrome-extension`;
 }
 
 /** The page that performs the login handoff (see docs/adr/0005-authentication.md). */

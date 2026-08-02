@@ -117,3 +117,21 @@ describe('inbound frame validation', () => {
     expect(parseServerMessage(huge).ok).toBe(false);
   });
 });
+
+describe('error copy', () => {
+  it('tells the user what to DO when the capture gesture is missing', async () => {
+    const { userMessageFor } = await import('@/shared/errors');
+    const msg = userMessageFor('capture_needs_gesture');
+    // Chrome's own wording ("Extension has not been invoked for the current page") is
+    // unactionable. The copy must name the icon and the order of operations.
+    expect(msg).toMatch(/icon/i);
+    expect(msg).toMatch(/start/i);
+  });
+
+  it('never leaks an internal detail into user-facing copy', async () => {
+    const { VoxError } = await import('@/shared/errors');
+    const err = new VoxError('capture_denied', 'chromeMediaSourceId rejected at 0x7f');
+    expect(err.userMessage).not.toContain('chromeMediaSourceId');
+    expect(err.detail).toContain('chromeMediaSourceId');
+  });
+});

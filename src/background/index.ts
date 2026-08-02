@@ -63,6 +63,13 @@ interface Runtime {
   tabTitle: string | null;
   /** Stream id of the live capture, so a reconnect never re-requests tabCapture. */
   streamId: string | null;
+  /**
+   * The tab the user last invoked the extension on, i.e. the only tab `activeTab` — and
+   * therefore `tabCapture` — is granted for. Chrome offers no way to query the grant, so
+   * we track the gesture ourselves in order to give an accurate error instead of a bare
+   * "permission denied".
+   */
+  grantedTabId: number | null;
   reconnect: { attempt: number; startedAt: number; timer: number | null };
   translatedAudioActive: boolean;
 }
@@ -78,6 +85,7 @@ const runtime: Runtime = {
   capturedTabId: null,
   tabTitle: null,
   streamId: null,
+  grantedTabId: null,
   reconnect: { attempt: 0, startedAt: 0, timer: null },
   translatedAudioActive: false,
 };
@@ -305,6 +313,16 @@ async function startSession(): Promise<void> {
   }
   runtime.capturedTabId = tab.id;
   runtime.tabTitle = tab.title ?? null;
+
+  // Fail early with an ACTIONABLE message. Without the gesture, getMediaStreamId returns
+  // "Extension has not been invoked for the current page", which tells the user nothing
+  // about what to do next.
+  if (runtime.grantedTabId !== tab.id) {
+    dispatch({ type: 'CAPTURE_DENIED', reason: 'capture_needs_gesture' });
+    runtime.errorCode = 'capture_needs_gesture';
+    broadcast();
+    return;
+  }
 
   let streamId: string;
   try {
@@ -785,6 +803,40 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
+/**
+ * The toolbar click is the load-bearing gesture, not just UI.
+ *
+ * `activeTab` — and with it `tabCapture` — is granted ONLY by executing an action, a
+ * context menu item, a keyboard shortcut, or an omnibox suggestion. Opening or clicking
+ * inside a side panel grants nothing. So `openPanelOnActionClick` must stay OFF: letting
+ * Chrome open the panel for us consumes the click, `onClicked` never fires, and capture
+ * is denied forever with a message the user cannot act on.
+ *
+ * Instead the click lands here — granting capture for THIS tab — and we open the panel
+ * ourselves. `sidePanel.open` is allowed because we are inside a user gesture.
+ */
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id === undefined) return;
+  runtime.grantedTabId = tab.id;
+  runtime.errorCode = null;
+  void chrome.sidePanel.open({ tabId: tab.id }).catch((cause: unknown) => {
+    console.warn('[voxtranslate] could not open side panel', cause);
+  });
+  broadcast();
+});
+
+/**
+ * The grant dies with the page: Chrome revokes `activeTab` when the tab navigates to
+ * another origin or closes. Forgetting it here is what lets the panel say "click the
+ * icon again" instead of failing with a denial the user cannot explain.
+ */
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (tabId === runtime.grantedTabId && changeInfo.url) {
+    runtime.grantedTabId = null;
+  }
+});
+
 chrome.runtime.onInstalled.addListener(() => {
-  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  // Explicitly OFF — see the comment on action.onClicked above.
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
 });

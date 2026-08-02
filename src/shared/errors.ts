@@ -10,6 +10,7 @@
 export type ErrorCode =
   | 'unsupported_chrome'
   | 'capture_denied'
+  | 'capture_needs_gesture'
   | 'tab_unavailable'
   | 'tab_closed'
   | 'auth_expired'
@@ -29,6 +30,9 @@ export type ErrorCode =
 const MESSAGES: Record<ErrorCode, string> = {
   unsupported_chrome: 'This version of Chrome is too old. Update Chrome and try again.',
   capture_denied: 'VoxTranslate needs permission to capture this tab’s audio.',
+  capture_needs_gesture:
+    'Click the VoxTranslate icon in the toolbar while on this tab, then press Start. ' +
+    'Chrome only lets an extension capture a tab you opened it on.',
   tab_unavailable: 'This tab’s audio can’t be captured. Try a normal web page.',
   tab_closed: 'The tab being translated was closed.',
   auth_expired: 'Your session expired. Please sign in again.',
