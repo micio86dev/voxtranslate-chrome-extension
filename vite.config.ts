@@ -37,6 +37,9 @@ export default defineConfig(({ mode }) => {
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __APP_ORIGIN__: JSON.stringify(appOrigin),
       __DEV_BUILD__: JSON.stringify(dev),
+      // Stamped at build time so a running extension can say exactly which build it is.
+      // "Did you rebuild?" cost real diagnostic time more than once.
+      __BUILD_STAMP__: JSON.stringify(new Date().toISOString().replace('T', ' ').slice(0, 19)),
     },
     // NOTE: the content script is NOT built here — it needs an IIFE wrapper so repeated
     // injection cannot redeclare top-level bindings. See vite.content.config.ts.

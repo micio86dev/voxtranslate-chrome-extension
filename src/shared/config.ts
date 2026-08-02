@@ -7,10 +7,13 @@
 declare const __API_ORIGIN__: string;
 declare const __APP_ORIGIN__: string;
 declare const __DEV_BUILD__: boolean;
+declare const __BUILD_STAMP__: string;
 
 export const API_ORIGIN: string = __API_ORIGIN__;
 export const APP_ORIGIN: string = __APP_ORIGIN__;
 export const IS_DEV: boolean = __DEV_BUILD__;
+/** When this bundle was built. Logged on wake so "did you rebuild?" is never a guess. */
+export const BUILD_STAMP: string = __BUILD_STAMP__;
 
 /** WebSocket origin derived from the API origin, so there is one thing to configure. */
 export const WS_ORIGIN: string = API_ORIGIN.replace(/^http/, 'ws');

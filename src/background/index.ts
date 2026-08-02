@@ -19,7 +19,7 @@ import {
   originalAudioGain,
   type LanguageModeState,
 } from '@/audio/language-mode';
-import { WS_ORIGIN } from '@/shared/config';
+import { BUILD_STAMP, WS_ORIGIN } from '@/shared/config';
 import { DEFAULT_BACKOFF, isFatalCloseCode, nextBackoff } from '@/websocket/backoff';
 import { fromServerCode, redact, VoxError, type ErrorCode } from '@/shared/errors';
 import {
@@ -781,6 +781,7 @@ async function renderSubtitle(update: {
  * touching handler awaits this first.
  */
 const ready: Promise<void> = (async () => {
+  console.info(`[voxtranslate] build ${BUILD_STAMP}`);
   await loadPreferences();
   const token = await readToken();
   runtime.session = initialContext(Boolean(token));

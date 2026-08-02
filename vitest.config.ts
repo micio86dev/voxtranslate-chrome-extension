@@ -11,6 +11,7 @@ export default defineConfig({
     __API_ORIGIN__: JSON.stringify('http://localhost:0'),
     __APP_ORIGIN__: JSON.stringify('http://localhost:0'),
     __DEV_BUILD__: 'true',
+    __BUILD_STAMP__: JSON.stringify('test'),
   },
   test: {
     environment: 'happy-dom',

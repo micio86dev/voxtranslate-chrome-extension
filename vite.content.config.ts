@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __APP_ORIGIN__: JSON.stringify(appOrigin),
       __DEV_BUILD__: JSON.stringify(dev),
+      __BUILD_STAMP__: JSON.stringify(new Date().toISOString().replace('T', ' ').slice(0, 19)),
     },
     build: {
       // Runs after the main build, so it must not wipe it.
