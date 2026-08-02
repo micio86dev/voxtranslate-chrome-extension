@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite build --mode development --watch",
-    "build": "vite build",
+    "build": "vite build && vite build --config vite.content.config.ts",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",

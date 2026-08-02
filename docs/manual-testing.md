@@ -101,6 +101,9 @@ On a YouTube video in a foreign language:
 - [ ] Going fullscreen keeps subtitles visible.
 - [ ] Leaving fullscreen keeps subtitles visible.
 - [ ] Navigating within a SPA (YouTube next video) does not produce two overlays.
+- [ ] The page console shows NO `Identifier '…' has already been declared` after a second
+      start on the same tab. (The content script is an IIFE precisely so re-injection is
+      safe; this is the symptom if that ever regresses.)
 - [ ] Stopping removes the overlay immediately and completely.
 
 ## 5. Language bypass

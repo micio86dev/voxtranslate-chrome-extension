@@ -10,7 +10,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect, test, type BrowserContext } from '@playwright/test';
@@ -84,4 +84,42 @@ test('the offscreen document loads without error', async () => {
   expect(errors).toEqual([]);
 
   await page.close();
+});
+
+test('the content script survives repeated injection', async () => {
+  // Regression: `executeScript` re-evaluates the file in the SAME isolated world, and a
+  // page can be injected more than once (SPA navigation, a retry, a second session). A
+  // non-IIFE bundle redeclared its top-level bindings and died with
+  // "Identifier 'f' has already been declared" — BEFORE the in-file guard could run, so
+  // the guard was no protection at all. This asserts the shipped bundle is safe.
+  const page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('data:text/html,<title>overlay reinjection</title><p>hello');
+
+  // A plain page has no extension context. Stub just enough of chrome.runtime for the
+  // overlay to install its listener — the point of this test is the shared-scope
+  // redeclaration, not the messaging.
+  await page.evaluate(() => {
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      runtime: { onMessage: { addListener: () => {} } },
+    };
+  });
+
+  const script = readFileSync(resolve(DIST, 'content/overlay.js'), 'utf8');
+  // Two evaluations in one world reproduce exactly what a second injection does.
+  await page.evaluate(script);
+  await page.evaluate(script);
+  await page.evaluate(script);
+
+  expect(errors, `content script threw on re-injection: ${errors.join(' | ')}`).toEqual([]);
+  await page.close();
+});
+
+test('the built content script declares nothing in the shared scope', () => {
+  // The structural guarantee behind the test above: an IIFE, so nothing leaks out.
+  const script = readFileSync(resolve(DIST, 'content/overlay.js'), 'utf8');
+  expect(script.trimStart()).toMatch(/^\(function\s*\(/);
+  // A bare top-level `const`/`let` would reintroduce the redeclaration crash.
+  expect(script).not.toMatch(/^\s*(const|let)\s/m);
 });

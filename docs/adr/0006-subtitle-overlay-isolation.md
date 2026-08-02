@@ -44,5 +44,15 @@ disappears when a `<video>` goes fullscreen — precisely when subtitles matter 
   overlay. Handled as a warning, not a session failure.
 - Finals replace partials **in place** rather than clearing first, which is what prevents
   the visible flicker between segments.
+- **The bundle must be an IIFE.** `executeScript` re-evaluates the file in the SAME
+  isolated world, and a page gets injected more than once (SPA navigation, a retry, a
+  second session). A plain-script bundle put its top-level bindings in that shared scope,
+  so the second injection died with `Identifier 'f' has already been declared` — and the
+  in-file re-injection guard was useless, because the failure happens at _evaluation_
+  time, before any statement runs. The content script is therefore built separately
+  (`vite.content.config.ts`) with `format: 'iife'`; the other entries stay ESM because the
+  service worker is `type: module`. Two e2e tests hold the line: one evaluates the shipped
+  bundle three times and asserts no page error, the other asserts the file still opens
+  with `(function(`.
 - No site-specific adapters. The universal path works from captured tab audio, so nothing
   depends on YouTube's DOM.

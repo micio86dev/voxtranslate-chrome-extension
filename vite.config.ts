@@ -38,6 +38,9 @@ export default defineConfig(({ mode }) => {
       __APP_ORIGIN__: JSON.stringify(appOrigin),
       __DEV_BUILD__: JSON.stringify(dev),
     },
+    // NOTE: the content script is NOT built here — it needs an IIFE wrapper so repeated
+    // injection cannot redeclare top-level bindings. See vite.content.config.ts.
+    //
     // Root is `src` so HTML entries emit at `dist/sidepanel/index.html` — the exact
     // paths the manifest declares. With the project root instead, Vite mirrors the
     // source tree and produces `dist/src/sidepanel/index.html`, which Chrome cannot load.
@@ -52,7 +55,6 @@ export default defineConfig(({ mode }) => {
         input: {
           'background/index': resolve(__dirname, 'src/background/index.ts'),
           'offscreen/index': resolve(__dirname, 'src/offscreen/index.ts'),
-          'content/overlay': resolve(__dirname, 'src/content/overlay.ts'),
           'sidepanel/index': resolve(__dirname, 'src/sidepanel/index.html'),
           'offscreen/document': resolve(__dirname, 'src/offscreen/document.html'),
         },
