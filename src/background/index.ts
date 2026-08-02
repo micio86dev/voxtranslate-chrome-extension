@@ -186,6 +186,15 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
   broadcast();
 }
 
+/**
+ * Whether the selected tier is a speech-to-speech engine. That single capability decides
+ * both the capture encoding (PCM16 vs WebM/Opus) and whether translated audio can exist.
+ */
+function tierSpeaks(): boolean {
+  const engine = runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId);
+  return engine?.capabilities.translated_audio === true;
+}
+
 function effectiveGain(): number {
   return originalAudioGain({
     mode: runtime.languageMode.mode,
@@ -365,7 +374,12 @@ async function startSession(): Promise<void> {
     streamId,
     wsUrl: buildWsUrl(sessionId, token),
     originalVolume: effectiveGain(),
-    translatedAudioEnabled: runtime.preferences.translatedAudioEnabled,
+    translatedAudioEnabled: runtime.preferences.translatedAudioEnabled && tierSpeaks(),
+    // The speech-to-speech tiers consume PCM16; Standard consumes WebM/Opus. Sending the
+    // wrong one is not a degradation — the engine reads Opus bytes as samples and
+    // produces nothing at all, with no error. The tier is known here, so the encoder is
+    // decided before the socket opens rather than waiting for `capture_format`.
+    pcm: tierSpeaks(),
   });
 }
 

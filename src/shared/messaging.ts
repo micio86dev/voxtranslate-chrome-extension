@@ -107,6 +107,15 @@ export type OffscreenCommand =
       wsUrl: string;
       originalVolume: number;
       translatedAudioEnabled: boolean;
+      /**
+       * Encode as PCM16/24k instead of WebM/Opus.
+       *
+       * Not a preference — a contract. Standard consumes WebM/Opus; the speech-to-speech
+       * engines consume PCM16 and will read Opus bytes as garbage samples. The tier is
+       * known before the socket opens, so the encoder is chosen up front rather than
+       * waiting for the server's `capture_format`, which would race the `start` frame.
+       */
+      pcm: boolean;
     }
   | { kind: 'STOP_CAPTURE'; sessionId: string }
   | { kind: 'SET_ORIGINAL_VOLUME'; sessionId: string; volume: number }

@@ -144,7 +144,7 @@ interface Harness {
   pipeline: CapturePipeline;
 }
 
-function harness(overrides: Partial<PipelineEnv> = {}): Harness {
+function harness(overrides: Partial<PipelineEnv> = {}, pcm = false): Harness {
   const stream = new FakeStream();
   const context = new FakeAudioContext();
   let recorder!: FakeRecorder;
@@ -179,6 +179,7 @@ function harness(overrides: Partial<PipelineEnv> = {}): Harness {
       wsUrl: 'ws://test/ws',
       originalVolume: 0.2,
       translatedAudioEnabled: false,
+      pcm,
     },
     {
       onSocketOpen: () => (events.opened += 1),
@@ -204,6 +205,19 @@ function harness(overrides: Partial<PipelineEnv> = {}): Harness {
   } as Harness;
 }
 
+/**
+ * Open the socket and let the encoder start.
+ *
+ * Encoder selection is async (the PCM path awaits an AudioWorklet module), so the
+ * recorder does not exist on the same tick as the `open` event.
+ */
+async function open(h: Harness): Promise<void> {
+  h.socket.emit('open');
+  await vi.waitFor(() => expect(h.recorder ?? h.pipeline).toBeDefined());
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 // --- tests -----------------------------------------------------------------
 
 describe('capture pipeline', () => {
@@ -225,8 +239,8 @@ describe('capture pipeline', () => {
     expect(h.context.lastGain?.gain.value).toBe(0.2);
   });
 
-  it('encodes with the format the backend already ingests', () => {
-    h.socket.emit('open');
+  it('encodes with the format the backend already ingests', async () => {
+    await open(h);
     expect(h.recorder.options.mimeType).toBe(AUDIO.mimeType);
     expect(h.recorder.options.audioBitsPerSecond).toBe(AUDIO.bitsPerSecond);
     expect(h.recorder.timeslice).toBe(AUDIO.timesliceMs);
@@ -242,13 +256,13 @@ describe('capture pipeline', () => {
     expect(h.recorder).toBeUndefined();
   });
 
-  it('starts a FRESH recorder on every connection, so each stream carries a header', () => {
-    h.socket.emit('open');
+  it('starts a FRESH recorder on every connection, so each stream carries a header', async () => {
+    await open(h);
     const first = h.recorder;
     expect(first.state).toBe('recording');
 
     h.pipeline.reconnect('ws://test/ws?retry=1');
-    h.socket.emit('open');
+    await open(h);
 
     // A resumed recorder would emit a headerless continuation, and the server's NEW
     // Deepgram session could not decode it.
@@ -260,7 +274,7 @@ describe('capture pipeline', () => {
   it('falls back to a plain webm mime when the preferred codec is unsupported', async () => {
     const fallback = harness({ isTypeSupported: () => false });
     await fallback.pipeline.start();
-    fallback.socket.emit('open');
+    await open(fallback);
     expect(fallback.recorder.options.mimeType).toBe(AUDIO.fallbackMimeType);
   });
 
@@ -271,14 +285,14 @@ describe('capture pipeline', () => {
   });
 
   it('forwards encoded chunks to the socket', async () => {
-    h.socket.emit('open');
+    await open(h);
     h.recorder.emitChunk(512);
     await vi.waitFor(() => expect(h.socket.sent.length).toBeGreaterThan(1));
     expect(h.socket.sent.some((s) => s instanceof ArrayBuffer)).toBe(true);
   });
 
   it('drops audio instead of buffering when the socket backs up', async () => {
-    h.socket.emit('open');
+    await open(h);
     const before = h.socket.sent.length;
     h.socket.bufferedAmount = BACKPRESSURE_BYTES + 1;
     h.recorder.emitChunk(512);
@@ -289,7 +303,7 @@ describe('capture pipeline', () => {
   });
 
   it('ignores empty chunks', async () => {
-    h.socket.emit('open');
+    await open(h);
     const before = h.socket.sent.length;
     h.recorder.emitChunk(0);
     await new Promise((r) => setTimeout(r, 20));
@@ -325,7 +339,7 @@ describe('capture pipeline', () => {
   });
 
   it('releases every resource on dispose', async () => {
-    h.socket.emit('open'); // the recorder only exists once the socket is up
+    await open(h); // the recorder only exists once the socket is up
     await h.pipeline.dispose();
 
     expect(h.recorder.state).toBe('inactive');
@@ -335,7 +349,7 @@ describe('capture pipeline', () => {
   });
 
   it('sends a stop control frame before closing the socket', async () => {
-    h.socket.emit('open');
+    await open(h);
     await h.pipeline.dispose();
     expect(h.socket.sent.some((s) => String(s).includes('"stop"'))).toBe(true);
   });
@@ -407,7 +421,7 @@ describe('reconnection', () => {
     const h = harness();
     await h.pipeline.start();
     h.pipeline.reconnect('ws://test/ws?retry=1');
-    h.socket.emit('open');
+    await open(h);
 
     const before = h.socket.sent.length;
     h.recorder.emitChunk(256);
@@ -429,7 +443,7 @@ describe('encoder switching', () => {
   it('stops the Opus recorder when the server asks for PCM', async () => {
     const h = harness();
     await h.pipeline.start();
-    h.socket.emit('open');
+    await open(h);
     expect(h.recorder.state).toBe('recording');
 
     // PcmEncoder needs a real AudioWorklet, which happy-dom does not provide, so the
@@ -442,9 +456,33 @@ describe('encoder switching', () => {
   it('is a no-op when already in the requested mode', async () => {
     const h = harness();
     await h.pipeline.start();
-    h.socket.emit('open');
+    await open(h);
     const recorder = h.recorder;
     await h.pipeline.setPcmMode(false);
     expect(h.recorder).toBe(recorder);
+  });
+});
+
+describe('capture encoding contract', () => {
+  it('uses WebM/Opus for a subtitles-only tier', async () => {
+    const h = harness();
+    await h.pipeline.start();
+    await open(h);
+    // Standard consumes WebM/Opus; a MediaRecorder is the right encoder.
+    expect(h.recorder).toBeDefined();
+    expect(h.recorder.options.mimeType).toBe(AUDIO.mimeType);
+  });
+
+  it('does NOT start a MediaRecorder for a speech-to-speech tier', async () => {
+    // The bug this guards: Pro and Premium consume PCM16 and read Opus bytes as samples,
+    // producing neither subtitles nor audio — silently. The encoder must be chosen from
+    // the tier BEFORE the socket opens, not from a later capture_format round-trip that
+    // races the `start` frame.
+    const h = harness({}, true);
+    await h.pipeline.start();
+    h.socket.emit('open');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.recorder).toBeUndefined();
   });
 });

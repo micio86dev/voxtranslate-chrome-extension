@@ -34,6 +34,7 @@ async function startCapture(command: Extract<OffscreenCommand, { kind: 'START_CA
       wsUrl: command.wsUrl,
       originalVolume: command.originalVolume,
       translatedAudioEnabled: command.translatedAudioEnabled,
+      pcm: command.pcm,
     },
     {
       onSocketOpen: () => emit({ kind: 'SOCKET_OPEN', sessionId }),

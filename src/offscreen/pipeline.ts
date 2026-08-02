@@ -39,6 +39,8 @@ export interface PipelineOptions {
   wsUrl: string;
   originalVolume: number;
   translatedAudioEnabled: boolean;
+  /** Encode PCM16/24k (speech-to-speech tiers) rather than WebM/Opus (Standard). */
+  pcm: boolean;
 }
 
 /**
@@ -90,6 +92,8 @@ export class CapturePipeline {
   /** User's preferred original-audio level, before ducking is applied. */
   private preferredVolume: number;
   private ducked = false;
+  /** Which encoder the server expects. Set from the tier, corrected by `capture_format`. */
+  private pcmMode: boolean;
 
   constructor(
     private readonly options: PipelineOptions,
@@ -97,6 +101,7 @@ export class CapturePipeline {
     private readonly env: PipelineEnv = DEFAULT_ENV,
   ) {
     this.preferredVolume = options.originalVolume;
+    this.pcmMode = options.pcm;
   }
 
   private pickMimeType(): string {
@@ -170,9 +175,9 @@ export class CapturePipeline {
       // server then fed Deepgram a headerless stream: language detection fell back to
       // its default and transcription produced nothing, with no error anywhere.
       //
-      // A FRESH recorder per connection is also what a reconnect needs: the server
-      // opens a new Deepgram session, and that session needs its own header.
-      this.restartRecorder();
+      // A FRESH encoder per connection is also what a reconnect needs: the server opens
+      // a new upstream session, and a WebM one needs its own header.
+      void this.restartEncoder();
     });
     socket.addEventListener('message', (event) => {
       if (typeof event.data === 'string') this.callbacks.onFrame(event.data);
@@ -222,7 +227,7 @@ export class CapturePipeline {
    * first chunk, and every Deepgram session on the other end needs that header to decode
    * the stream at all.
    */
-  private restartRecorder(): void {
+  private async restartEncoder(): Promise<void> {
     if (this.recorder && this.recorder.state !== 'inactive') {
       try {
         this.recorder.stop();
@@ -231,7 +236,30 @@ export class CapturePipeline {
       }
     }
     this.recorder = null;
-    this.startRecorder();
+    await this.pcmEncoder?.dispose();
+    this.pcmEncoder = null;
+
+    if (this.pcmMode) {
+      await this.startPcmEncoder();
+    } else {
+      this.startRecorder();
+    }
+  }
+
+  /** Open the PCM16/24k path; falls back to Opus rather than leaving the session mute. */
+  private async startPcmEncoder(): Promise<void> {
+    if (!this.stream) return;
+    const encoder = new PcmEncoder(this.stream, {
+      onChunk: (buffer) => this.sendAudio(buffer),
+      onError: (reason) => this.callbacks.onError(reason, 'provider_unavailable'),
+    });
+    const ok = await encoder.start();
+    if (ok) {
+      this.pcmEncoder = encoder;
+    } else {
+      this.pcmMode = false;
+      this.startRecorder();
+    }
   }
 
   private startRecorder(): void {
@@ -270,25 +298,8 @@ export class CapturePipeline {
   async setPcmMode(pcm: boolean): Promise<void> {
     if (this.disposed || !this.stream) return;
     if (pcm === (this.pcmEncoder !== null)) return;
-
-    if (pcm) {
-      if (this.recorder && this.recorder.state !== 'inactive') this.recorder.stop();
-      this.recorder = null;
-
-      const encoder = new PcmEncoder(this.stream, {
-        onChunk: (buffer) => this.sendAudio(buffer),
-        onError: (reason) => this.callbacks.onError(reason, 'provider_unavailable'),
-      });
-      const ok = await encoder.start();
-      this.pcmEncoder = ok ? encoder : null;
-      // A failed PCM switch must not leave the session mute: fall back to Opus.
-      if (!ok) this.startRecorder();
-      return;
-    }
-
-    await this.pcmEncoder?.dispose();
-    this.pcmEncoder = null;
-    this.startRecorder();
+    this.pcmMode = pcm;
+    await this.restartEncoder();
   }
 
   /** Build the translated-speech graph. Failure degrades to subtitles, never to silence. */
