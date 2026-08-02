@@ -256,13 +256,17 @@ interface Rendered {
 function renderFrame(
   raw: string,
   target: string,
-  opts: { dual: boolean; bypassed: boolean },
+  opts: { dual: boolean; bypassed: boolean; tierSpeaks?: boolean },
 ): Rendered | null {
   const parsed = parseServerMessage(raw);
   if (!parsed.ok) return null;
   const m = parsed.message;
 
   if (m.type === 'subtitle_interim' && 'text' in m) {
+    // Speech-to-speech engines send an already-translated partial (labelled with the
+    // source language, and delivered only to listeners of the target); Standard sends
+    // the raw transcript to everyone.
+    if (opts.tierSpeaks) return { main: m.text };
     return opts.dual ? { secondary: m.text } : null;
   }
   if (m.type === 'subtitle_final' && 'original' in m) {
@@ -325,5 +329,37 @@ describe('subtitle language', () => {
       bypassed: false,
     });
     expect(out).toEqual({ main: 'ciao mondo', secondary: 'hola mundo' });
+  });
+});
+
+describe('partials depend on the engine, not the frame', () => {
+  it('puts a speech-tier partial on the MAIN line — it is already translated', () => {
+    // Discarding these is why most of the text never appeared on Pro and Premium: the
+    // live caption IS the translation there, and only the sparse finals were rendered.
+    const out = renderFrame(interim('ciao mondo', 'es'), 'it', {
+      dual: false,
+      bypassed: false,
+      tierSpeaks: true,
+    });
+    expect(out).toEqual({ main: 'ciao mondo' });
+  });
+
+  it('still keeps a Standard partial off the main line', () => {
+    const out = renderFrame(interim('hola mundo', 'es'), 'it', {
+      dual: false,
+      bypassed: false,
+      tierSpeaks: false,
+    });
+    expect(out).toBeNull();
+  });
+
+  it('does not put a speech-tier partial on the original line in dual mode', () => {
+    // It is the translation, so labelling it "original" would be a lie.
+    const out = renderFrame(interim('ciao mondo', 'es'), 'it', {
+      dual: true,
+      bypassed: false,
+      tierSpeaks: true,
+    });
+    expect(out).toEqual({ main: 'ciao mondo' });
   });
 });

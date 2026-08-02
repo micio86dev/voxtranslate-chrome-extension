@@ -558,15 +558,21 @@ function handleServerFrame(sessionId: string, raw: string): void {
   switch (message.type) {
     case 'subtitle_interim': {
       if (!('text' in message)) break;
-      // Partials arrive UNTRANSLATED — the server sends the raw transcript in the
-      // SOURCE language by design. Putting them on the main line is what produced
-      // "subtitles in a mix of Italian and Spanish": every partial flashed Spanish
-      // before the final replaced it with Italian.
+      // Whether a partial is translated depends on the ENGINE, and the frame cannot tell
+      // you: the speech-to-speech engines send an already-translated caption but still
+      // label it with the SOURCE language (`emit_interim_to_lang` in engine/pro.rs), and
+      // they only deliver it to listeners of the target language — which is us.
       //
-      // So a partial only ever reaches the secondary line, and only when the user asked
-      // to see the original too. Otherwise it is dropped: the promise is subtitles in
-      // YOUR language, and a foreign partial does not keep it.
-      if (runtime.preferences.dualLanguageSubtitles) {
+      // Standard is the opposite: its partials are the raw transcript, broadcast to
+      // everyone. Putting THOSE on the main line is what produced subtitles alternating
+      // between Italian and Spanish.
+      //
+      // So the engine we picked decides where a partial goes. Getting this wrong on the
+      // speech tiers meant discarding the live caption entirely and showing only the
+      // finals — most of the text never appeared.
+      if (tierSpeaks()) {
+        void renderSubtitle({ main: message.text });
+      } else if (runtime.preferences.dualLanguageSubtitles) {
         void renderSubtitle({ secondary: message.text });
       }
       break;
