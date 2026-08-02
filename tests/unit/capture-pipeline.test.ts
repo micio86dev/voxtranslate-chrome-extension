@@ -226,15 +226,41 @@ describe('capture pipeline', () => {
   });
 
   it('encodes with the format the backend already ingests', () => {
+    h.socket.emit('open');
     expect(h.recorder.options.mimeType).toBe(AUDIO.mimeType);
     expect(h.recorder.options.audioBitsPerSecond).toBe(AUDIO.bitsPerSecond);
     expect(h.recorder.timeslice).toBe(AUDIO.timesliceMs);
     expect(h.recorder.state).toBe('recording');
   });
 
+  it('does NOT record before the socket is open', () => {
+    // The bug this guards: recording started immediately, so every chunk produced
+    // before the handshake completed was dropped by sendAudio — including chunk #1,
+    // the one carrying the WebM header. The server then fed Deepgram a headerless
+    // stream: detection fell back to its default and transcription returned nothing,
+    // with no error raised anywhere.
+    expect(h.recorder).toBeUndefined();
+  });
+
+  it('starts a FRESH recorder on every connection, so each stream carries a header', () => {
+    h.socket.emit('open');
+    const first = h.recorder;
+    expect(first.state).toBe('recording');
+
+    h.pipeline.reconnect('ws://test/ws?retry=1');
+    h.socket.emit('open');
+
+    // A resumed recorder would emit a headerless continuation, and the server's NEW
+    // Deepgram session could not decode it.
+    expect(h.recorder).not.toBe(first);
+    expect(first.state).toBe('inactive');
+    expect(h.recorder.state).toBe('recording');
+  });
+
   it('falls back to a plain webm mime when the preferred codec is unsupported', async () => {
     const fallback = harness({ isTypeSupported: () => false });
     await fallback.pipeline.start();
+    fallback.socket.emit('open');
     expect(fallback.recorder.options.mimeType).toBe(AUDIO.fallbackMimeType);
   });
 
@@ -299,6 +325,7 @@ describe('capture pipeline', () => {
   });
 
   it('releases every resource on dispose', async () => {
+    h.socket.emit('open'); // the recorder only exists once the socket is up
     await h.pipeline.dispose();
 
     expect(h.recorder.state).toBe('inactive');
@@ -402,6 +429,7 @@ describe('encoder switching', () => {
   it('stops the Opus recorder when the server asks for PCM', async () => {
     const h = harness();
     await h.pipeline.start();
+    h.socket.emit('open');
     expect(h.recorder.state).toBe('recording');
 
     // PcmEncoder needs a real AudioWorklet, which happy-dom does not provide, so the
@@ -414,6 +442,7 @@ describe('encoder switching', () => {
   it('is a no-op when already in the requested mode', async () => {
     const h = harness();
     await h.pipeline.start();
+    h.socket.emit('open');
     const recorder = h.recorder;
     await h.pipeline.setPcmMode(false);
     expect(h.recorder).toBe(recorder);

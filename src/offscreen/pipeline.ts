@@ -113,8 +113,8 @@ export class CapturePipeline {
     }
 
     this.buildAudioGraph();
+    // The recorder is started by the socket's `open` handler, NOT here — see wireSocket.
     this.openSocket();
-    this.startRecorder();
 
     if (this.options.translatedAudioEnabled) await this.enableTranslatedAudio();
   }
@@ -165,6 +165,14 @@ export class CapturePipeline {
       // The server opens the STT stream on `start`, not on connect.
       socket.send(JSON.stringify({ type: 'start' }));
       this.callbacks.onSocketOpen();
+      // Start recording ONLY now. Starting earlier silently discarded the opening
+      // chunks — including chunk #1, which is the one carrying the WebM header. The
+      // server then fed Deepgram a headerless stream: language detection fell back to
+      // its default and transcription produced nothing, with no error anywhere.
+      //
+      // A FRESH recorder per connection is also what a reconnect needs: the server
+      // opens a new Deepgram session, and that session needs its own header.
+      this.restartRecorder();
     });
     socket.addEventListener('message', (event) => {
       if (typeof event.data === 'string') this.callbacks.onFrame(event.data);
@@ -202,7 +210,28 @@ export class CapturePipeline {
     old?.close(1000, 'reconnecting');
 
     this.player?.flush();
+    // wireSocket restarts the recorder on `open`, which is exactly what the new
+    // Deepgram session on the other end needs — a stream that begins with a header.
     this.wireSocket(this.env.createSocket(wsUrl));
+  }
+
+  /**
+   * Stop any running recorder and start a new one.
+   *
+   * New — not resumed — on purpose: only a fresh MediaRecorder emits a header-bearing
+   * first chunk, and every Deepgram session on the other end needs that header to decode
+   * the stream at all.
+   */
+  private restartRecorder(): void {
+    if (this.recorder && this.recorder.state !== 'inactive') {
+      try {
+        this.recorder.stop();
+      } catch {
+        // Already stopped (e.g. the track ended); starting a new one is still correct.
+      }
+    }
+    this.recorder = null;
+    this.startRecorder();
   }
 
   private startRecorder(): void {
