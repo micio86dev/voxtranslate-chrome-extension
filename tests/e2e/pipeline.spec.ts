@@ -144,8 +144,8 @@ test('hides tiers the extension cannot deliver, and marks the ones that speak', 
   // falls back to the default, so offering it would be a lie.
   expect(text).not.toMatch(/Enhanced/);
   expect(text).toMatch(/Standard/);
-  // Standard does not speak, so it must not carry the marker.
-  expect(text).not.toMatch(/Standard[^|]*speaks/);
+  // Standard's voice is synthesised on the device, so it must not claim a natural one.
+  expect(text).not.toMatch(/Standard[^|]*natural voice/);
 });
 
 test('offers only languages the selected tier can produce', async () => {

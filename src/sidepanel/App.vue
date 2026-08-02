@@ -49,11 +49,13 @@ const targetLanguages = computed(() => {
 });
 
 /**
- * Whether the selected tier produces translated SPEECH. Standard does not — it returns
- * subtitles only — so offering a live toggle for it would promise something the backend
- * never sends.
+ * Whether the SERVER streams the translated voice for this tier.
+ *
+ * Not the same as "you can hear it". Standard's voice is synthesised on the device — its
+ * own description says so — so every tier can speak; they just differ in where the audio
+ * comes from, and therefore in how natural it sounds.
  */
-const tierSpeaks = computed(() => selectedEngine.value?.capabilities.translated_audio === true);
+const serverSpeaks = computed(() => selectedEngine.value?.capabilities.translated_audio === true);
 
 const remainingMinutes = computed(() => {
   const rate = selectedEngine.value?.rate_per_minute;
@@ -153,7 +155,7 @@ function openBuyCredits(): void {
           >
             <option v-for="engine in usableEngines" :key="engine.id" :value="engine.id">
               {{ engine.display_name }} — ${{ engine.rate_per_minute.toFixed(3) }}/min{{
-                engine.capabilities.translated_audio ? ' · speaks' : ''
+                engine.capabilities.translated_audio ? ' · natural voice' : ''
               }}
             </option>
           </select>
@@ -208,12 +210,10 @@ function openBuyCredits(): void {
           />
           <span>Also show the original language</span>
         </label>
-
         <label class="toggle">
           <input
             type="checkbox"
-            :disabled="!tierSpeaks"
-            :checked="state.preferences.translatedAudioEnabled && tierSpeaks"
+            :checked="state.preferences.translatedAudioEnabled"
             @change="
               session.updatePreferences({
                 translatedAudioEnabled: ($event.target as HTMLInputElement).checked,
@@ -222,9 +222,9 @@ function openBuyCredits(): void {
           />
           <span>Speak the translation</span>
         </label>
-        <p v-if="!tierSpeaks" class="fine">
-          {{ selectedEngine?.display_name ?? 'This tier' }} produces subtitles only. Choose a tier
-          with translated speech to hear it.
+        <p v-if="state.preferences.translatedAudioEnabled && !serverSpeaks" class="fine">
+          {{ selectedEngine?.display_name ?? 'This tier' }} speaks with your device's voice. Tiers
+          marked “natural voice” are spoken by the translation model itself.
         </p>
 
         <label class="field">

@@ -22,6 +22,11 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
  *                 an action click, context menu, keyboard shortcut or omnibox can — so
  *                 the toolbar click is what authorises capture, and it opens the panel
  *                 programmatically (see background/index.ts).
+ * - `tts`         speaks the translation for tiers whose voice is synthesised on the
+ *                 device (Standard). chrome.tts is used rather than speechSynthesis
+ *                 because an offscreen document is not a supported host for the Web
+ *                 Speech API, and this way the voice does not depend on the capture
+ *                 pipeline being alive.
  * - `identity`    launchWebAuthFlow for the PKCE login handoff.
  * - `storage`     tokens + a cache of server-owned preferences.
  * - `scripting`   programmatic overlay injection on user gesture (paired with activeTab,
@@ -50,6 +55,7 @@ export function buildManifest(env: {
       'sidePanel',
       'identity',
       'scripting',
+      'tts',
     ],
 
     // Narrow host permissions: only VoxTranslate's own origins. The overlay reaches

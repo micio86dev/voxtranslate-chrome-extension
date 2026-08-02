@@ -164,6 +164,7 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
   // languages to translate into. Without this the session keeps producing the old one
   // and the user has to stop and start to see any effect.
   if (patch.targetLanguage && runtime.session.sessionId) {
+    stopSpeaking(); // queued speech is in the previous language
     void chrome.runtime.sendMessage({
       kind: 'SET_TARGET_LANG',
       sessionId: runtime.session.sessionId,
@@ -187,8 +188,14 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
 }
 
 /**
- * Whether the selected tier is a speech-to-speech engine. That single capability decides
- * both the capture encoding (PCM16 vs WebM/Opus) and whether translated audio can exist.
+ * Whether the SERVER streams translated audio for the selected tier.
+ *
+ * This is NOT "can the user hear a voice". Standard's own description says the translated
+ * voice is "synthesized on your device": the server sends subtitles only, and the client
+ * speaks them. Conflating the two is why Standard appeared to have no voice at all.
+ *
+ * It decides two things: the capture encoding (PCM16 vs WebM/Opus) and whether to expect
+ * `translated_audio` frames.
  */
 function tierSpeaks(): boolean {
   const engine = runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId);
@@ -443,7 +450,7 @@ async function stopSession(): Promise<void> {
   }
   runtime.tabTitle = null;
   runtime.streamId = null;
-  runtime.translatedAudioActive = false;
+  stopSpeaking();
 }
 
 // --- reconnection ----------------------------------------------------------
@@ -574,6 +581,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
           main: translated,
           secondary: runtime.preferences.dualLanguageSubtitles ? message.original : null,
         });
+        speakLocally(translated);
         break;
       }
 
@@ -604,6 +612,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
       if (runtime.languageMode.mode !== previous) {
         // Entering bypass must silence queued translated speech immediately.
         if (runtime.languageMode.mode === 'bypassed' && runtime.session.sessionId) {
+          stopSpeaking();
           runtime.translatedAudioActive = false;
           void chrome.runtime.sendMessage({
             kind: 'FLUSH_TRANSLATED_AUDIO',
@@ -667,6 +676,43 @@ function handleServerFrame(sessionId: string, raw: string): void {
     }
     default:
       break;
+  }
+}
+
+/**
+ * Speak a finalized translation on the device.
+ *
+ * Only for tiers whose voice is synthesised locally — the speech-to-speech tiers stream
+ * their own audio and speaking here would double it. Segments are enqueued rather than
+ * interrupting, so a fast speaker does not clip their own previous sentence, and the
+ * original is ducked for as long as the voice is talking.
+ */
+function speakLocally(text: string): void {
+  if (!runtime.preferences.translatedAudioEnabled || tierSpeaks()) return;
+  if (runtime.languageMode.mode === 'bypassed') return; // nothing to translate
+  if (!text.trim()) return;
+
+  chrome.tts.speak(text, {
+    lang: runtime.preferences.targetLanguage,
+    enqueue: true,
+    onEvent: (event) => {
+      if (event.type === 'start') {
+        runtime.translatedAudioActive = true;
+        pushVolume();
+      } else if (event.type === 'end' || event.type === 'interrupted' || event.type === 'error') {
+        runtime.translatedAudioActive = false;
+        pushVolume();
+      }
+    },
+  });
+}
+
+/** Stop any queued speech — on stop, on bypass, and on a language change. */
+function stopSpeaking(): void {
+  chrome.tts.stop();
+  if (runtime.translatedAudioActive) {
+    runtime.translatedAudioActive = false;
+    pushVolume();
   }
 }
 
