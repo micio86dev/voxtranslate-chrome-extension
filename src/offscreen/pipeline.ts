@@ -404,6 +404,10 @@ export class CapturePipeline {
     // never a blob: URL, which the CSP blocks and which fails silently.
     setCaptureWorkletUrl(chrome.runtime.getURL('pcm-capture-worklet.js'));
 
+    // Count consecutive failed translations. cartesia.ts falls back to the SOURCE text
+    // when a translation does not arrive, which looks exactly like "the output language
+    // is the input language" — a silent, very confusing failure. Say it out loud.
+    let translateFailures = 0;
     this.hop = new TranslateHop((frame) => {
       const socket = this.socket;
       if (!socket || socket.readyState !== WS_OPEN) {
@@ -420,8 +424,21 @@ export class CapturePipeline {
 
     const manager = new CartesiaManager({
       fetchSession,
-      translate: (text, source, target) =>
-        this.hop?.translate(text, source, target) ?? Promise.resolve(null),
+      translate: async (text, source, target) => {
+        const result = (await this.hop?.translate(text, source, target)) ?? null;
+        if (result === null) {
+          translateFailures += 1;
+          if (translateFailures === 3) {
+            this.callbacks.onError(
+              'the translation service did not answer — showing the original text',
+              'provider_unavailable',
+            );
+          }
+        } else {
+          translateFailures = 0;
+        }
+        return result;
+      },
       onSubtitle: (_speakerId, text, interim, original) => {
         if (!interim) console.debug('[voxtranslate] enhanced: final caption');
         this.callbacks.onLocalSubtitle?.(text, interim, original);
