@@ -316,6 +316,8 @@ function openBuyCredits(): void {
           not being charged for translation.
         </p>
 
+        <!-- v-if / v-else MUST stay adjacent: an element between them re-pairs the
+             v-else with the wrong condition, which is how Start and Stop both appeared. -->
         <button
           v-if="!isActive"
           class="primary"
@@ -324,8 +326,8 @@ function openBuyCredits(): void {
         >
           Start translating this tab
         </button>
-        <p v-if="!isActive && blockedReason" class="fine">{{ blockedReason }}</p>
         <button v-else class="danger" @click="session.stop()">Stop</button>
+        <p v-if="!isActive && blockedReason" class="fine">{{ blockedReason }}</p>
         <p v-if="!isActive && state.errorCode === 'capture_needs_gesture'" class="fine">
           Chrome only lets an extension capture a tab it was opened on — clicking the toolbar icon
           is what grants that, and it has to be done on the tab you want translated.

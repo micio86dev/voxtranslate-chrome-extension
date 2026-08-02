@@ -376,11 +376,29 @@ export class CapturePipeline {
   private async startClientDirect(): Promise<void> {
     if (this.disposed || !this.stream || this.cartesia) return;
 
+    console.info('[voxtranslate] enhanced: starting in-browser pipeline', {
+      source: this.options.sourceLang,
+      target: this.options.targetLang,
+      speech: this.options.translatedAudioEnabled,
+    });
+
     const fetchSession = this.callbacks.fetchCartesiaSession;
     if (!fetchSession) {
       this.callbacks.onError('no Cartesia session provider', 'provider_unavailable');
       return;
     }
+    if (!CartesiaManager.supported) {
+      this.callbacks.onError('browser cannot run the Cartesia pipeline', 'provider_unavailable');
+      return;
+    }
+    // Fail loudly HERE rather than let the manager sit inert: a session it cannot mint
+    // looks identical to a session that simply never produces anything.
+    const probe = await fetchSession().catch(() => null);
+    if (!probe) {
+      this.callbacks.onError('could not mint a Cartesia session', 'provider_unavailable');
+      return;
+    }
+    console.info('[voxtranslate] enhanced: session minted, stt=', probe.sttEndpoint);
 
     // The worklet ships with the extension, so it is served from the extension origin —
     // never a blob: URL, which the CSP blocks and which fails silently.
@@ -388,7 +406,10 @@ export class CapturePipeline {
 
     this.hop = new TranslateHop((frame) => {
       const socket = this.socket;
-      if (!socket || socket.readyState !== WS_OPEN) return false;
+      if (!socket || socket.readyState !== WS_OPEN) {
+        console.warn('[voxtranslate] enhanced: cannot translate, socket not open');
+        return false;
+      }
       socket.send(frame);
       return true;
     });
@@ -402,9 +423,11 @@ export class CapturePipeline {
       translate: (text, source, target) =>
         this.hop?.translate(text, source, target) ?? Promise.resolve(null),
       onSubtitle: (_speakerId, text, interim, original) => {
+        if (!interim) console.debug('[voxtranslate] enhanced: final caption');
         this.callbacks.onLocalSubtitle?.(text, interim, original);
       },
       onError: (_speakerId, status, message) => {
+        console.warn('[voxtranslate] enhanced pipeline gave up:', status, message);
         this.callbacks.onError(`${status}: ${message}`, 'provider_unavailable');
       },
       playAudio: (_speakerId, seq, pcm16Base64) => {
@@ -417,6 +440,7 @@ export class CapturePipeline {
     manager.setPeerLang(TAB_PEER_ID, this.options.sourceLang);
     manager.activate(this.options.targetLang);
     this.cartesia = manager;
+    console.info('[voxtranslate] enhanced: pipeline activated');
   }
 
   /** Route one `translated_text` reply back to whoever asked for it (Enhanced only). */

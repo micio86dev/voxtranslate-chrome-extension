@@ -133,3 +133,18 @@ test('the overlay can be restyled without rebuilding it', async () => {
   expect(script).toMatch(/--vox-bottom/);
   expect(script).toMatch(/OVERLAY_STYLE/);
 });
+
+test('never shows Start and Stop at the same time', async () => {
+  // A v-else must sit immediately after its v-if. Inserting an element between them
+  // re-pairs the v-else with the wrong condition and both buttons render — which is
+  // exactly what happened, on every tier, until this test existed.
+  const page = await context.newPage();
+  await page.goto(`chrome-extension://${extensionId}/sidepanel/index.html`);
+
+  const start = page.getByRole('button', { name: /start translating/i });
+  const stop = page.getByRole('button', { name: /^stop$/i });
+  const both = (await start.count()) > 0 && (await stop.count()) > 0;
+  expect(both, 'Start and Stop must be mutually exclusive').toBe(false);
+
+  await page.close();
+});
