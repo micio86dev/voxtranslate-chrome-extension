@@ -180,6 +180,9 @@ function harness(overrides: Partial<PipelineEnv> = {}, pcm = false): Harness {
       originalVolume: 0.2,
       translatedAudioEnabled: false,
       pcm,
+      clientDirect: false,
+      sourceLang: 'es',
+      targetLang: 'it',
     },
     {
       onSocketOpen: () => (events.opened += 1),

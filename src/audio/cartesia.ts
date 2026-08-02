@@ -21,7 +21,6 @@
 // translate, how to play audio, and the spoken-voice toggle, so the transcript logic stays
 // unit-testable without a live WebSocket / AudioContext.
 
-
 /** A minted client-direct session: the scoped access token + the public endpoints. */
 export interface CartesiaSession {
   /** Short-lived Cartesia access token (both STT + TTS grants), passed as the WS
@@ -275,8 +274,7 @@ export class CartesiaManager {
     if (this.gaveUp.has(peerId)) return;
     const lang = this.langs.get(peerId);
     const stream = this.streams.get(peerId);
-    const want =
-      this.active && !!lang && !!stream && lang !== 'auto' && lang !== this.myLang;
+    const want = this.active && !!lang && !!stream && lang !== 'auto' && lang !== this.myLang;
     const existing = this.pipelines.get(peerId);
 
     if (!want) {
@@ -552,8 +550,7 @@ export class CartesiaManager {
         this.retryTimers.delete(peerId);
         const lang = this.langs.get(peerId);
         const stream = this.streams.get(peerId);
-        const want =
-          this.active && !!lang && !!stream && lang !== 'auto' && lang !== this.myLang;
+        const want = this.active && !!lang && !!stream && lang !== 'auto' && lang !== this.myLang;
         if (!want || this.gaveUp.has(peerId) || this.pipelines.has(peerId)) return;
         void this.startPipeline(peerId, stream as MediaStream, lang as string, attempt + 1);
       }, RETRY_BACKOFF_MS[attempt]);

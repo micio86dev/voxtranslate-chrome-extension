@@ -33,9 +33,30 @@ const loggedIn = computed(() => state.value.account !== null);
  * default engine. Offering it here would let the user pick a tier and quietly get a
  * different one, which is worse than not offering it.
  */
-const usableEngines = computed(() =>
-  (state.value.account?.engines ?? []).filter((e) => !e.capabilities.client_direct),
+const usableEngines = computed(() => state.value.account?.engines ?? []);
+
+/**
+ * Enhanced runs Cartesia in the browser, and Cartesia has no language auto-detect
+ * (`reconcile` refuses a peer whose language is 'auto'). So this tier — and only this
+ * tier — needs the spoken language stated up front.
+ */
+const needsSourceLanguage = computed(
+  () => selectedEngine.value?.capabilities.client_direct === true,
 );
+
+const sourceLanguages = computed(() => {
+  const tier = selectedEngine.value?.tier;
+  const allowed = tier ? new Set(languagesForTier(tier)) : null;
+  return allLanguages().filter((l) => !allowed || allowed.has(l.code));
+});
+
+/** Enhanced cannot start until a spoken language is chosen. */
+const blockedReason = computed(() => {
+  if (needsSourceLanguage.value && state.value.preferences.sourceLanguage === 'auto') {
+    return 'Choose the spoken language first — this tier cannot detect it.';
+  }
+  return null;
+});
 
 const selectedEngine = computed(() =>
   usableEngines.value.find((e) => e.id === state.value.preferences.engineId),
@@ -164,10 +185,25 @@ function openBuyCredits(): void {
 
         <label class="field">
           <span>Spoken language</span>
-          <select disabled>
-            <option>Auto detect</option>
+          <select
+            :value="state.preferences.sourceLanguage"
+            :disabled="isActive"
+            @change="
+              session.updatePreferences({
+                sourceLanguage: ($event.target as HTMLSelectElement).value,
+              })
+            "
+          >
+            <option v-if="!needsSourceLanguage" value="auto">Auto detect</option>
+            <option v-for="lang in sourceLanguages" :key="lang.code" :value="lang.code">
+              {{ lang.flag }} {{ lang.native }}
+            </option>
           </select>
         </label>
+        <p v-if="needsSourceLanguage" class="fine">
+          {{ selectedEngine?.display_name }} cannot detect the spoken language, so it has to be set
+          here.
+        </p>
 
         <label class="field">
           <span>Translate into</span>
@@ -280,9 +316,15 @@ function openBuyCredits(): void {
           not being charged for translation.
         </p>
 
-        <button v-if="!isActive" class="primary" :disabled="isBusy" @click="session.start()">
+        <button
+          v-if="!isActive"
+          class="primary"
+          :disabled="isBusy || blockedReason !== null"
+          @click="session.start()"
+        >
           Start translating this tab
         </button>
+        <p v-if="!isActive && blockedReason" class="fine">{{ blockedReason }}</p>
         <button v-else class="danger" @click="session.stop()">Stop</button>
         <p v-if="!isActive && state.errorCode === 'capture_needs_gesture'" class="fine">
           Chrome only lets an extension capture a tab it was opened on — clicking the toolbar icon

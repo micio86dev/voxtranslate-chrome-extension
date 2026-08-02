@@ -172,6 +172,14 @@ export function parseServerMessage(raw: string): ValidationResult {
       return { ok: true, message: { type: 'error', message, ...(code ? { code } : {}) } };
     }
 
+    case 'translated_text': {
+      const requestId = str(parsed['request_id'], 128);
+      const text = str(parsed['text']);
+      if (requestId === null || text === null) {
+        return { ok: false, reason: 'translated_text: bad fields' };
+      }
+      return { ok: true, message: { type: 'translated_text', request_id: requestId, text } };
+    }
     case 'room_joined': {
       const peerId = str(parsed['peer_id'], 128);
       if (peerId === null) return { ok: false, reason: 'room_joined: bad peer_id' };

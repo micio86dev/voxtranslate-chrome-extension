@@ -230,6 +230,16 @@ function tierSpeaks(): boolean {
   return engine?.capabilities.translated_audio === true;
 }
 
+/**
+ * Whether the selected tier runs its provider in the BROWSER (Cartesia "Enhanced").
+ * Such a tier sends no audio to our server; the socket carries billing and the
+ * translation hop only.
+ */
+function tierIsClientDirect(): boolean {
+  const engine = runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId);
+  return engine?.capabilities.client_direct === true;
+}
+
 /** The tier's behaviour for THIS session — pinned at start, see `sessionTierSpeaks`. */
 function sessionSpeaks(): boolean {
   return runtime.sessionTierSpeaks;
@@ -416,6 +426,9 @@ async function startSession(): Promise<void> {
     sessionId,
     streamId,
     wsUrl: buildWsUrl(sessionId, token),
+    clientDirect: tierIsClientDirect(),
+    sourceLang: runtime.preferences.sourceLanguage,
+    targetLang: runtime.preferences.targetLanguage,
     originalVolume: effectiveGain(),
     translatedAudioEnabled: runtime.preferences.translatedAudioEnabled && tierSpeaks(),
     // The speech-to-speech tiers consume PCM16; Standard consumes WebM/Opus. Sending the
@@ -683,6 +696,18 @@ function handleServerFrame(sessionId: string, raw: string): void {
     case 'low_balance': {
       runtime.lowBalance = true;
       broadcast();
+      break;
+    }
+    case 'translated_text': {
+      // The Enhanced hop's reply. It belongs to the offscreen document, which owns the
+      // pending request — the worker only relays it.
+      if (!('request_id' in message)) break;
+      void chrome.runtime.sendMessage({
+        kind: 'TRANSLATED_TEXT',
+        sessionId,
+        requestId: (message as { request_id: string }).request_id,
+        text: (message as { text: string }).text,
+      });
       break;
     }
     case 'capture_format': {
@@ -954,6 +979,31 @@ function handleOffscreenEvent(event: OffscreenEvent): void {
       return;
     case 'CAPTURE_STARTED':
       return;
+
+    case 'LOCAL_SUBTITLE': {
+      if (runtime.session.sessionId !== event.sessionId) return;
+      // Enhanced captions are produced in the browser, so they never pass through
+      // handleServerFrame — but they are still captions, and the stall detector must see
+      // them or it would announce "voice only" over a perfectly working tier.
+      noteCaption();
+      if (event.interim) {
+        // Cartesia's interim IS the source text: the translation only exists once the
+        // segment is finalized and has been round-tripped through our server.
+        if (runtime.preferences.dualLanguageSubtitles) {
+          void renderSubtitle({ secondary: event.text });
+        }
+      } else {
+        void renderSubtitle({
+          main: event.text,
+          secondary: runtime.preferences.dualLanguageSubtitles ? (event.original ?? null) : null,
+        });
+      }
+      return;
+    }
+
+    case 'FETCH_CARTESIA_SESSION':
+      // Handled in the listener below, which owns the response channel.
+      return;
     case 'TEARDOWN_COMPLETE':
       dispatch({ type: 'TEARDOWN_COMPLETE' });
       return;
@@ -979,6 +1029,16 @@ const PANEL_KINDS = new Set<string>([
 chrome.runtime.onMessage.addListener(
   (message: PanelRequest | OffscreenEvent, _sender, sendResponse) => {
     if (!message || typeof message !== 'object' || !('kind' in message)) return false;
+
+    // Enhanced mints its Cartesia grant through the worker: only it holds the session
+    // token, and the offscreen document must never see one.
+    if (message.kind === 'FETCH_CARTESIA_SESSION') {
+      void ready
+        .then(() => api.enhancedSession())
+        .then((dto) => sendResponse(dto))
+        .catch(() => sendResponse(null));
+      return true;
+    }
 
     if (message.kind === 'GET_STATE') {
       // Must report rehydrated state, so reply asynchronously. Returning true keeps the

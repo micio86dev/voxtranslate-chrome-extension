@@ -28,6 +28,17 @@ export interface TokenResponse {
 
 export type TokenProvider = () => Promise<string | null>;
 
+/** Wire shape of `POST /api/sessions/enhanced/session` (server/src/api.rs). */
+export interface CartesiaSessionDto {
+  token: string;
+  expires_at: number;
+  cartesia_version: string;
+  stt: { endpoint: string; model: string; models_by_lang?: Record<string, string> };
+  tts: { endpoint: string; model: string };
+  voice_cloning_enabled: boolean;
+  default_voice_id?: string | null;
+}
+
 export class ApiClient {
   private readonly fetchImpl: typeof fetch;
 
@@ -96,6 +107,25 @@ export class ApiClient {
       authenticated: false,
     });
     return body.engines ?? [];
+  }
+
+  /**
+   * `POST /api/sessions/enhanced/session` — mint a short-lived, scoped Cartesia token.
+   *
+   * The raw Cartesia key never reaches a client; the server mints a grant and returns the
+   * public endpoints with it. Returns null when the tier is not configured or the account
+   * cannot cover it, so the caller can fall back rather than throw mid-session.
+   */
+  async enhancedSession(): Promise<CartesiaSessionDto | null> {
+    try {
+      return await this.request<CartesiaSessionDto>('/api/sessions/enhanced/session', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+    } catch (cause) {
+      console.warn('[voxtranslate] enhanced session unavailable', String(cause));
+      return null;
+    }
   }
 
   /** `POST /api/user/language` — persists the target language across devices. */

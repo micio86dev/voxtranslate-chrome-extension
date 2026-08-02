@@ -137,15 +137,34 @@ test('renders the synced account in the side panel', async () => {
   await expect(panel.locator('select').first()).toContainText('Standard');
 });
 
-test('hides tiers the extension cannot deliver, and marks the ones that speak', async () => {
+test('offers every tier the extension can deliver, and marks the ones with a natural voice', async () => {
   const options = await panel.locator('select').first().locator('option').allTextContents();
   const text = options.join(' | ');
-  // A client_direct tier runs the provider in the browser; an extension session silently
-  // falls back to the default, so offering it would be a lie.
-  expect(text).not.toMatch(/Enhanced/);
   expect(text).toMatch(/Standard/);
+  // Enhanced is supported again now that the in-browser pipeline exists.
+  expect(text).toMatch(/Enhanced/);
   // Standard's voice is synthesised on the device, so it must not claim a natural one.
   expect(text).not.toMatch(/Standard[^|]*natural voice/);
+});
+
+test('a client-direct tier requires the spoken language before it can start', async () => {
+  // Cartesia has no auto-detect — `reconcile` refuses a peer whose language is 'auto' —
+  // so Start must be blocked with a reason rather than opening a session that can never
+  // produce anything.
+  await panel.locator('select').first().selectOption('cartesia');
+  await panel.waitForTimeout(200);
+
+  await expect(panel.getByText(/cannot detect the spoken language/i)).toBeVisible();
+  await expect(panel.getByRole('button', { name: /start translating/i })).toBeDisabled();
+
+  // Choosing a language unblocks it.
+  await panel.locator('select').nth(1).selectOption('en');
+  await panel.waitForTimeout(200);
+  await expect(panel.getByRole('button', { name: /start translating/i })).toBeEnabled();
+
+  // Restore for the tests that follow.
+  await panel.locator('select').first().selectOption('standard');
+  await panel.waitForTimeout(200);
 });
 
 test('offers only languages the selected tier can produce', async () => {

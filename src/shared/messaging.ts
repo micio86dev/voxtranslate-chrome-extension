@@ -116,6 +116,11 @@ export type OffscreenCommand =
        * waiting for the server's `capture_format`, which would race the `start` frame.
        */
       pcm: boolean;
+      /** Run the provider in this browser (Cartesia "Enhanced"). */
+      clientDirect: boolean;
+      /** The spoken language — required for Enhanced, which cannot auto-detect. */
+      sourceLang: string;
+      targetLang: string;
     }
   | { kind: 'STOP_CAPTURE'; sessionId: string }
   | { kind: 'SET_ORIGINAL_VOLUME'; sessionId: string; volume: number }
@@ -133,7 +138,9 @@ export type OffscreenCommand =
    * in the room, so changing the target locally is not enough — it has to be told, or
    * it keeps producing the old language and the client finds nothing to render.
    */
-  | { kind: 'SET_TARGET_LANG'; sessionId: string; lang: string };
+  | { kind: 'SET_TARGET_LANG'; sessionId: string; lang: string }
+  /** A `translated_text` reply relayed to the pending Enhanced request. */
+  | { kind: 'TRANSLATED_TEXT'; sessionId: string; requestId: string; text: string };
 
 export type OffscreenEvent =
   | { kind: 'CAPTURE_STARTED'; sessionId: string }
@@ -142,6 +149,10 @@ export type OffscreenEvent =
   | { kind: 'SOCKET_CLOSED'; sessionId: string; code: number; serverCode?: string }
   | { kind: 'SERVER_FRAME'; sessionId: string; raw: string }
   | { kind: 'TRANSLATED_AUDIO_ACTIVE'; sessionId: string; active: boolean }
+  /** A caption produced in-browser by the Enhanced pipeline (never a server frame). */
+  | { kind: 'LOCAL_SUBTITLE'; sessionId: string; text: string; interim: boolean; original?: string }
+  /** Enhanced needs a Cartesia grant; only the worker holds the session token. */
+  | { kind: 'FETCH_CARTESIA_SESSION' }
   | { kind: 'TEARDOWN_COMPLETE'; sessionId: string };
 
 // --- background → content script ------------------------------------------

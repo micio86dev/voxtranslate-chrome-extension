@@ -35,6 +35,9 @@ async function startCapture(command: Extract<OffscreenCommand, { kind: 'START_CA
       originalVolume: command.originalVolume,
       translatedAudioEnabled: command.translatedAudioEnabled,
       pcm: command.pcm,
+      clientDirect: command.clientDirect,
+      sourceLang: command.sourceLang,
+      targetLang: command.targetLang,
     },
     {
       onSocketOpen: () => emit({ kind: 'SOCKET_OPEN', sessionId }),
@@ -43,6 +46,25 @@ async function startCapture(command: Extract<OffscreenCommand, { kind: 'START_CA
       onError: (reason, code) => emit({ kind: 'CAPTURE_FAILED', sessionId, reason, code }),
       onTranslatedAudioActive: (active) =>
         emit({ kind: 'TRANSLATED_AUDIO_ACTIVE', sessionId, active }),
+      // Enhanced captions are produced HERE, so they never arrive as a server frame.
+      onLocalSubtitle: (text, interim, original) =>
+        emit({ kind: 'LOCAL_SUBTITLE', sessionId, text, interim, original }),
+      fetchCartesiaSession: async () => {
+        const dto = await chrome.runtime.sendMessage({ kind: 'FETCH_CARTESIA_SESSION' });
+        if (!dto) return null;
+        return {
+          token: dto.token,
+          expiresAt: dto.expires_at,
+          cartesiaVersion: dto.cartesia_version,
+          sttEndpoint: dto.stt.endpoint,
+          sttModel: dto.stt.model,
+          sttModelsByLang: dto.stt.models_by_lang ?? {},
+          ttsEndpoint: dto.tts.endpoint,
+          ttsModel: dto.tts.model,
+          voiceCloningEnabled: dto.voice_cloning_enabled,
+          defaultVoiceId: dto.default_voice_id ?? undefined,
+        };
+      },
     },
   );
 
@@ -107,6 +129,10 @@ chrome.runtime.onMessage.addListener((message: OffscreenCommand) => {
 
     case 'FLUSH_TRANSLATED_AUDIO':
       if (owns(message.sessionId)) pipeline?.flushTranslatedAudio();
+      break;
+
+    case 'TRANSLATED_TEXT':
+      if (owns(message.sessionId)) pipeline?.acceptTranslation(message.requestId, message.text);
       break;
 
     case 'SET_TARGET_LANG':

@@ -82,6 +82,13 @@ export interface EngineDowngraded {
   reason: string;
 }
 
+/** Reply to the Enhanced translate hop (spec 0108). */
+export interface TranslatedText {
+  type: 'translated_text';
+  request_id: string;
+  text: string;
+}
+
 export interface ServerError {
   type: 'error';
   message: string;
@@ -112,6 +119,7 @@ export type ServerMessage =
   | BalanceExhausted
   | CaptureFormat
   | EngineDowngraded
+  | TranslatedText
   | ServerError
   | UnknownMessage;
 

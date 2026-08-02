@@ -20,7 +20,9 @@
  */
 
 import { AUDIO } from '@/shared/config';
+import { CartesiaManager, setCaptureWorkletUrl, type CartesiaSession } from '@/audio/cartesia';
 import { PcmEncoder } from './pcm-encoder';
+import { TranslateHop } from './translate-hop';
 import { TranslatedAudioPlayer } from './translated-audio-player';
 import type { AudioFrame } from '@/audio/translated-audio-queue';
 
@@ -31,6 +33,13 @@ export interface PipelineCallbacks {
   onError(reason: string, code: string): void;
   /** Translated speech started or stopped, so the caller can update the UI. */
   onTranslatedAudioActive?(active: boolean): void;
+  /**
+   * A caption produced IN THIS BROWSER (Enhanced only). The server never sees this text,
+   * so it cannot arrive as a `subtitle_*` frame like every other tier's does.
+   */
+  onLocalSubtitle?(text: string, interim: boolean, original?: string): void;
+  /** Mint a Cartesia session (Enhanced only) — injected so the pipeline stays testable. */
+  fetchCartesiaSession?: () => Promise<CartesiaSession | null>;
 }
 
 export interface PipelineOptions {
@@ -41,6 +50,16 @@ export interface PipelineOptions {
   translatedAudioEnabled: boolean;
   /** Encode PCM16/24k (speech-to-speech tiers) rather than WebM/Opus (Standard). */
   pcm: boolean;
+  /**
+   * Run the provider IN THIS BROWSER (Cartesia "Enhanced") instead of streaming audio to
+   * the server. The socket still carries billing and the translation hop — Cartesia does
+   * speech-to-text and text-to-speech but not translation.
+   */
+  clientDirect: boolean;
+  /** The spoken language. Required for Enhanced: Cartesia cannot detect it. */
+  sourceLang: string;
+  /** The language to translate into. */
+  targetLang: string;
 }
 
 /**
@@ -79,6 +98,9 @@ const WS_OPEN = 1;
 /** How far the original audio is ducked while translated speech is playing. */
 export const DUCK_FACTOR = 0.25;
 
+/** The tab is the only "speaker" an extension session has. */
+const TAB_PEER_ID = 'tab';
+
 export class CapturePipeline {
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -87,6 +109,8 @@ export class CapturePipeline {
   private pcmEncoder: PcmEncoder | null = null;
   private socket: WebSocket | null = null;
   private player: TranslatedAudioPlayer | null = null;
+  private cartesia: CartesiaManager | null = null;
+  private hop: TranslateHop | null = null;
   private disposed = false;
 
   /** User's preferred original-audio level, before ducking is applied. */
@@ -118,7 +142,8 @@ export class CapturePipeline {
     }
 
     this.buildAudioGraph();
-    // The recorder is started by the socket's `open` handler, NOT here — see wireSocket.
+    // The encoder is started by the socket's `open` handler, NOT here — see wireSocket.
+    // On a client-direct tier no encoder ever starts: no audio goes to our server.
     this.openSocket();
 
     if (this.options.translatedAudioEnabled) await this.enableTranslatedAudio();
@@ -179,9 +204,15 @@ export class CapturePipeline {
       // server then fed Deepgram a headerless stream: language detection fell back to
       // its default and transcription produced nothing, with no error anywhere.
       //
-      // A FRESH encoder per connection is also what a reconnect needs: the server opens
-      // a new upstream session, and a WebM one needs its own header.
-      void this.restartEncoder();
+      if (this.options.clientDirect) {
+        // Nothing to encode: the browser talks to the provider directly. The socket
+        // carries billing and the translation hop only.
+        void this.startClientDirect();
+      } else {
+        // A FRESH encoder per connection is also what a reconnect needs: the server opens
+        // a new upstream session, and a WebM one needs its own header.
+        void this.restartEncoder();
+      }
     });
     socket.addEventListener('message', (event) => {
       if (typeof event.data === 'string') this.callbacks.onFrame(event.data);
@@ -336,6 +367,63 @@ export class CapturePipeline {
     await player?.dispose();
   }
 
+  /**
+   * Start the in-browser Cartesia pipeline.
+   *
+   * The tab is modelled as a single "peer" whose language the user chose — Cartesia has
+   * no auto-detect, which is why Enhanced asks for the spoken language up front.
+   */
+  private async startClientDirect(): Promise<void> {
+    if (this.disposed || !this.stream || this.cartesia) return;
+
+    const fetchSession = this.callbacks.fetchCartesiaSession;
+    if (!fetchSession) {
+      this.callbacks.onError('no Cartesia session provider', 'provider_unavailable');
+      return;
+    }
+
+    // The worklet ships with the extension, so it is served from the extension origin —
+    // never a blob: URL, which the CSP blocks and which fails silently.
+    setCaptureWorkletUrl(chrome.runtime.getURL('pcm-capture-worklet.js'));
+
+    this.hop = new TranslateHop((frame) => {
+      const socket = this.socket;
+      if (!socket || socket.readyState !== WS_OPEN) return false;
+      socket.send(frame);
+      return true;
+    });
+
+    if (!this.player && this.options.translatedAudioEnabled) {
+      await this.enableTranslatedAudio();
+    }
+
+    const manager = new CartesiaManager({
+      fetchSession,
+      translate: (text, source, target) =>
+        this.hop?.translate(text, source, target) ?? Promise.resolve(null),
+      onSubtitle: (_speakerId, text, interim, original) => {
+        this.callbacks.onLocalSubtitle?.(text, interim, original);
+      },
+      onError: (_speakerId, status, message) => {
+        this.callbacks.onError(`${status}: ${message}`, 'provider_unavailable');
+      },
+      playAudio: (_speakerId, seq, pcm16Base64) => {
+        this.player?.enqueue({ seq, pcm16_b64: pcm16Base64, sessionId: this.options.sessionId });
+      },
+      ttsEnabled: () => this.options.translatedAudioEnabled,
+    });
+
+    manager.setPeerStream(TAB_PEER_ID, this.stream);
+    manager.setPeerLang(TAB_PEER_ID, this.options.sourceLang);
+    manager.activate(this.options.targetLang);
+    this.cartesia = manager;
+  }
+
+  /** Route one `translated_text` reply back to whoever asked for it (Enhanced only). */
+  acceptTranslation(requestId: string, text: string): boolean {
+    return this.hop?.accept(requestId, text) ?? false;
+  }
+
   /** Feed one validated translated-audio frame to the player. */
   playTranslatedAudio(frame: AudioFrame): void {
     this.player?.enqueue(frame);
@@ -354,6 +442,10 @@ export class CapturePipeline {
    * renders as the untranslated original.
    */
   setTargetLanguage(lang: string): void {
+    // Enhanced translates in-browser, so the change is applied locally; the server is
+    // told anyway because it still meters and fans out for every other tier.
+    this.cartesia?.setMyLang(lang);
+    this.hop?.cancelAll(); // in-flight segments are for the previous language
     const socket = this.socket;
     if (!socket || socket.readyState !== WS_OPEN) return;
     socket.send(JSON.stringify({ type: 'set_lang', lang }));
@@ -390,6 +482,11 @@ export class CapturePipeline {
 
     await this.pcmEncoder?.dispose();
     this.pcmEncoder = null;
+
+    this.cartesia?.deactivate();
+    this.cartesia = null;
+    this.hop?.cancelAll();
+    this.hop = null;
 
     await this.player?.dispose();
     this.player = null;
