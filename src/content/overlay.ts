@@ -42,6 +42,9 @@ function createOverlay(): OverlayHandle {
   let line: HTMLDivElement | null = null;
   let originalLine: HTMLDivElement | null = null;
   let statusLine: HTMLDivElement | null = null;
+  // The plates carry the background and padding; the lines inside carry the clamp.
+  let linePlate: HTMLDivElement | null = null;
+  let originalPlate: HTMLDivElement | null = null;
   let fullscreenListener: (() => void) | null = null;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -95,23 +98,38 @@ function createOverlay(): OverlayHandle {
         text-align: center;
         pointer-events: none;
       }
-      /* A very long segment must not cover the video. Clamp instead of growing. */
+      /* The clamp and the plate MUST live on different elements. overflow:hidden clips
+         at the PADDING box, not the content box, so a clamped element that also carries
+         padding lets the next line show through the bottom padding: the reader sees an
+         ellipsis and then a sliced half-line under it. Plate on the wrapper, clamp on
+         the text. */
+      .plate {
+        /* A translucent plate plus a text shadow keeps the text readable over both
+           bright and dark video without a heavy opaque box. */
+        background: rgba(12, 12, 14, 0.72);
+        border-radius: 8px;
+        padding: 6px 14px;
+        max-width: 100%;
+      }
       .line, .original {
         display: -webkit-box;
         -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
         overflow: hidden;
+        /* No padding here, by design — see .plate above. */
+        padding: 0;
       }
       .line, .original, .status {
-        /* A translucent plate plus a text shadow keeps the text readable over both
-           bright and dark video without a heavy opaque box. */
-        background: rgba(12, 12, 14, 0.72);
         color: #fff;
-        border-radius: 8px;
-        padding: 6px 14px;
         text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
         line-height: 1.35;
         overflow-wrap: anywhere;
+      }
+      /* The status line is short and never clamped, so it wears its own plate. */
+      .status {
+        background: rgba(12, 12, 14, 0.72);
+        border-radius: 8px;
+        padding: 6px 14px;
       }
       .line { font-size: var(--vox-font-size, 22px); font-weight: 600; }
       /* The original has to stay READABLE, not decorative: it is a second subtitle, and
@@ -137,13 +155,21 @@ function createOverlay(): OverlayHandle {
     statusLine = document.createElement('div');
     statusLine.className = 'status hidden';
 
+    // Each subtitle is a plate (background + padding) wrapping the clamped text. The
+    // `hidden` class rides the PLATE, or an empty line would leave a bare box on screen.
+    originalPlate = document.createElement('div');
+    originalPlate.className = 'plate hidden';
     originalLine = document.createElement('div');
-    originalLine.className = 'original hidden';
+    originalLine.className = 'original';
+    originalPlate.append(originalLine);
 
+    linePlate = document.createElement('div');
+    linePlate.className = 'plate hidden';
     line = document.createElement('div');
-    line.className = 'line hidden';
+    line.className = 'line';
+    linePlate.append(line);
 
-    wrap.append(statusLine, originalLine, line);
+    wrap.append(statusLine, originalPlate, linePlate);
     shadow.append(style, wrap);
   }
 
@@ -163,11 +189,11 @@ function createOverlay(): OverlayHandle {
       // visible flicker between segments.
       if (main !== undefined && line) {
         line.textContent = main ?? '';
-        line.classList.toggle('hidden', !main);
+        linePlate?.classList.toggle('hidden', !main);
       }
       if (secondary !== undefined && originalLine) {
         originalLine.textContent = secondary ?? '';
-        originalLine.classList.toggle('hidden', !secondary);
+        originalPlate?.classList.toggle('hidden', !secondary);
       }
 
       // Restart the idle countdown: subtitles should fade out of the way during a pause
@@ -175,8 +201,10 @@ function createOverlay(): OverlayHandle {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         idleTimer = null;
-        line?.classList.add('hidden');
-        originalLine?.classList.add('hidden');
+        // Hide the PLATES, not the inner lines: hiding only the text would leave two
+        // empty translucent boxes sitting on the video.
+        linePlate?.classList.add('hidden');
+        originalPlate?.classList.add('hidden');
       }, IDLE_CLEAR_MS);
     },
 

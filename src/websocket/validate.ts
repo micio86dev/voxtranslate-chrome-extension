@@ -74,6 +74,8 @@ export function parseServerMessage(raw: string): ValidationResult {
           lang,
           speaker_id: speakerId,
           speaker_name: str(parsed['speaker_name'], 256) ?? '',
+          // Optional: the server omits it when `text` is already the original.
+          ...(str(parsed['original']) ? { original: str(parsed['original'])! } : {}),
         },
       };
     }

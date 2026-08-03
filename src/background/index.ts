@@ -11,6 +11,12 @@
  * offscreen document is torn down with it).
  */
 
+import {
+  capturesPcm,
+  shouldSpeakOnDevice,
+  wantsTranslatedVoice,
+  type VoiceCapabilities,
+} from '@/shared/voice-routing';
 import { ApiClient } from '@/api/client';
 import { clearSession, login, readToken } from '@/auth/session';
 import {
@@ -225,9 +231,13 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
  * It decides two things: the capture encoding (PCM16 vs WebM/Opus) and whether to expect
  * `translated_audio` frames.
  */
+function tierCapabilities(): VoiceCapabilities | undefined {
+  return runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId)
+    ?.capabilities;
+}
+
 function tierSpeaks(): boolean {
-  const engine = runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId);
-  return engine?.capabilities.translated_audio === true;
+  return capturesPcm(tierCapabilities());
 }
 
 /**
@@ -430,7 +440,10 @@ async function startSession(): Promise<void> {
     sourceLang: runtime.preferences.sourceLanguage,
     targetLang: runtime.preferences.targetLanguage,
     originalVolume: effectiveGain(),
-    translatedAudioEnabled: runtime.preferences.translatedAudioEnabled && tierSpeaks(),
+    translatedAudioEnabled: wantsTranslatedVoice(
+      runtime.preferences.translatedAudioEnabled,
+      tierCapabilities(),
+    ),
     // The speech-to-speech tiers consume PCM16; Standard consumes WebM/Opus. Sending the
     // wrong one is not a degradation — the engine reads Opus bytes as samples and
     // produces nothing at all, with no error. The tier is known here, so the encoder is
@@ -623,7 +636,16 @@ function handleServerFrame(sessionId: string, raw: string): void {
       // finals — most of the text never appeared.
       noteCaption();
       if (sessionSpeaks()) {
-        void renderSubtitle({ main: message.text });
+        // The partial IS the translation. When the frame also carries the speaker's
+        // original, stream BOTH lines live: previously the original could only appear on
+        // `subtitle_final`, a whole idle gap later, so dual-language subtitles looked
+        // like the source lagged seconds behind its own translation.
+        void renderSubtitle({
+          main: message.text,
+          ...(runtime.preferences.dualLanguageSubtitles && message.original
+            ? { secondary: message.original }
+            : {}),
+        });
       } else if (runtime.preferences.dualLanguageSubtitles) {
         void renderSubtitle({ secondary: message.text });
       }
@@ -763,7 +785,8 @@ function handleServerFrame(sessionId: string, raw: string): void {
  * original is ducked for as long as the voice is talking.
  */
 function speakLocally(text: string): void {
-  if (!runtime.preferences.translatedAudioEnabled || tierSpeaks()) return;
+  if (!shouldSpeakOnDevice(runtime.preferences.translatedAudioEnabled, tierCapabilities()))
+    return;
   if (runtime.languageMode.mode === 'bypassed') return; // nothing to translate
   if (!text.trim()) return;
 

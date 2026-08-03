@@ -22,6 +22,9 @@ export interface SubtitleInterim {
   speaker_name: string;
   text: string;
   lang: LanguageCode;
+  /** The speaker's ORIGINAL words, present only when `text` is a translation. Absent
+   *  when `text` already IS the original, so the two are never confused. */
+  original?: string;
 }
 
 export interface SubtitleFinal {
