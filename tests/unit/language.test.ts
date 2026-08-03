@@ -1,11 +1,82 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  catalogueReady,
   FALLBACK_LANGUAGE,
+  hydrateCatalogue,
   isSupported,
   languagesForTier,
   normalizeLocale,
   resolveTargetLanguage,
+  setCatalogue,
+  type Catalogue,
 } from '@/preferences/language';
+
+/**
+ * The catalogue is SERVED now, so these tests seed it explicitly instead of leaning on a
+ * bundled JSON. That is the point of the change — and it makes the assertions honest,
+ * since they now run against a fixture the test states rather than against whatever the
+ * real 84-language file happens to contain today.
+ */
+const LEGACY_8 = ['it', 'en', 'es', 'fr', 'de', 'pt', 'ja', 'zh'];
+
+const FIXTURE: Catalogue = {
+  regions: ['Europe', 'Asia'],
+  languages: [
+    { code: 'it', native: 'Italiano', english: 'Italian', region: 'Europe', rtl: false, flag: '🇮🇹' },
+    { code: 'en', native: 'English', english: 'English', region: 'Europe', rtl: false, flag: '🇬🇧' },
+    { code: 'es', native: 'Español', english: 'Spanish', region: 'Europe', rtl: false, flag: '🇪🇸' },
+    { code: 'fr', native: 'Français', english: 'French', region: 'Europe', rtl: false, flag: '🇫🇷' },
+    { code: 'de', native: 'Deutsch', english: 'German', region: 'Europe', rtl: false, flag: '🇩🇪' },
+    { code: 'pt', native: 'Português', english: 'Portuguese', region: 'Europe', rtl: false, flag: '🇵🇹' },
+    { code: 'ja', native: '日本語', english: 'Japanese', region: 'Asia', rtl: false, flag: '🇯🇵' },
+    { code: 'zh', native: '中文', english: 'Chinese', region: 'Asia', rtl: false, flag: '🇨🇳' },
+    { code: 'pt-BR', native: 'Português (BR)', english: 'Portuguese (Brazil)', region: 'Europe', rtl: false, flag: '🇧🇷' },
+  ],
+  tiers: {
+    standard: LEGACY_8,
+    enhanced: LEGACY_8,
+    pro: LEGACY_8,
+    premium: [...LEGACY_8, 'pt-BR'],
+  },
+};
+
+beforeEach(() => setCatalogue(FIXTURE));
+
+describe('catalogue hydration', () => {
+  it('starts EMPTY rather than guessing, so a stale list can never be shown', () => {
+    setCatalogue({ regions: [], languages: [], tiers: {} });
+    expect(catalogueReady()).toBe(false);
+    expect(isSupported('it')).toBe(false);
+    expect(languagesForTier('standard')).toEqual([]);
+  });
+
+  it('paints from cache first, then replaces it with the network answer', async () => {
+    setCatalogue({ regions: [], languages: [], tiers: {} });
+    const cached: Catalogue = { ...FIXTURE, tiers: { standard: ['it'] } };
+    let stored: Record<string, unknown> = {};
+    await hydrateCatalogue(async () => FIXTURE, {
+      get: async () => ({ 'vox.languageCatalogue': cached }),
+      set: async (items) => {
+        stored = items as Record<string, unknown>;
+      },
+    });
+    expect(languagesForTier('standard')).toEqual(FIXTURE.tiers.standard);
+    expect(stored['vox.languageCatalogue']).toEqual(FIXTURE);
+  });
+
+  it('keeps the cached catalogue when the network fails', async () => {
+    setCatalogue({ regions: [], languages: [], tiers: {} });
+    await hydrateCatalogue(
+      async () => {
+        throw new Error('offline');
+      },
+      { get: async () => ({ 'vox.languageCatalogue': FIXTURE }), set: async () => {} },
+    );
+    // Offline degrades to slightly stale, never to "no languages at all".
+    expect(catalogueReady()).toBe(true);
+    expect(isSupported('it')).toBe(true);
+  });
+});
 
 describe('locale normalisation', () => {
   it('normalises common Chrome UI locales to supported codes', () => {
@@ -75,9 +146,12 @@ describe('tier language catalogue', () => {
   });
 
   it('keeps every tier a superset of the legacy 8 languages', () => {
-    // Mirrors the invariant asserted on the Rust side (engine/langmap.rs), so a
-    // catalogue re-sync that breaks it fails here too.
-    const legacy = ['it', 'en', 'es', 'fr', 'de', 'pt', 'ja', 'zh'];
+    // The REAL invariant is asserted on the Rust side (engine/langmap.rs) against the
+    // actual catalogue. It used to be mirrored here because this repo carried a copy of
+    // that file; now the catalogue is served, so all this can honestly check is that the
+    // reader surfaces a tier list faithfully. Kept because the reader is what the picker
+    // depends on.
+    const legacy = LEGACY_8;
     for (const tier of ['standard', 'enhanced', 'pro', 'premium']) {
       const langs = languagesForTier(tier);
       for (const code of legacy) {

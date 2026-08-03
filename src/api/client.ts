@@ -8,6 +8,7 @@
 
 import { API_ORIGIN } from '@/shared/config';
 import { VoxError } from '@/shared/errors';
+import type { Catalogue } from '@/preferences/language';
 import type { EngineInfo } from '@/shared/messaging';
 
 export interface UserProfile {
@@ -107,6 +108,15 @@ export class ApiClient {
       authenticated: false,
     });
     return body.engines ?? [];
+  }
+
+  /**
+   * `GET /api/languages` — the shared language catalogue (metadata, region order, and
+   * the tier → output-languages map). Served rather than bundled so this extension never
+   * carries its own copy to drift out of step with what the engines can actually speak.
+   */
+  async languages(): Promise<Catalogue> {
+    return this.request<Catalogue>('/api/languages', { authenticated: false });
   }
 
   /**

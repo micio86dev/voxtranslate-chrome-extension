@@ -43,7 +43,7 @@ import {
   type SessionContext,
   type SessionEvent,
 } from '@/state/session-machine';
-import { resolveTargetLanguage } from '@/preferences/language';
+import { hydrateCatalogue, resolveTargetLanguage } from '@/preferences/language';
 import {
   applyBalanceUpdate,
   beginSession,
@@ -1125,3 +1125,25 @@ chrome.runtime.onInstalled.addListener(() => {
   // Explicitly OFF — see the comment on action.onClicked above.
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
 });
+
+/**
+ * Pull the language catalogue from the backend.
+ *
+ * Runs on install, on browser start, and on every service-worker wake: MV3 tears the
+ * worker down aggressively, so "fetch it once at startup" would in practice mean "fetch
+ * it once, then lose it". The cached copy in `chrome.storage.local` paints the picker
+ * immediately and the network refresh replaces it, so a cold wake is never blank.
+ */
+function loadLanguageCatalogue(): void {
+  void hydrateCatalogue(
+    () => api.languages(),
+    {
+      get: (key) => chrome.storage.local.get(key),
+      set: (items) => chrome.storage.local.set(items),
+    },
+  );
+}
+
+chrome.runtime.onInstalled.addListener(loadLanguageCatalogue);
+chrome.runtime.onStartup.addListener(loadLanguageCatalogue);
+loadLanguageCatalogue();

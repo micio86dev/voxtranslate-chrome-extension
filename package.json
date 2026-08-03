@@ -22,7 +22,6 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "package": "bun run build && bun scripts/package.ts",
-    "sync:langs": "bun scripts/sync-languages.ts",
     "verify": "bun run typecheck && bun run lint && bun run test && bun run build",
     "verify:all": "bun run verify && bun run test:e2e"
   },
