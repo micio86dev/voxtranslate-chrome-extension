@@ -157,6 +157,35 @@ export async function startFakeBackend(): Promise<FakeBackend> {
       return;
     }
 
+    // The language pickers are populated ENTIRELY from here — the extension ships no
+    // bundled catalogue. Without this route the worker's hydrate fails and both selects
+    // render zero options, which is the failure this fixture exists to catch.
+    if (url.pathname === '/api/languages') {
+      json(res, {
+        regions: ['Europe'],
+        languages: [
+          {
+            code: 'en',
+            native: 'English',
+            english: 'English',
+            region: 'Europe',
+            rtl: false,
+            flag: '🇬🇧',
+          },
+          {
+            code: 'it',
+            native: 'Italiano',
+            english: 'Italian',
+            region: 'Europe',
+            rtl: false,
+            flag: '🇮🇹',
+          },
+        ],
+        tiers: { standard: ['en', 'it'], enhanced: ['en', 'it'] },
+      });
+      return;
+    }
+
     res.writeHead(404, CORS);
     res.end('not found');
   });
