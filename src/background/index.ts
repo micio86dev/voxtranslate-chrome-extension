@@ -43,7 +43,7 @@ import {
   type SessionContext,
   type SessionEvent,
 } from '@/state/session-machine';
-import { hydrateCatalogue, resolveTargetLanguage } from '@/preferences/language';
+import { catalogue, hydrateCatalogue, resolveTargetLanguage } from '@/preferences/language';
 import {
   applyBalanceUpdate,
   beginSession,
@@ -232,8 +232,7 @@ async function savePreferences(patch: Partial<ExtensionPreferences>): Promise<vo
  * `translated_audio` frames.
  */
 function tierCapabilities(): VoiceCapabilities | undefined {
-  return runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId)
-    ?.capabilities;
+  return runtime.account?.engines.find((e) => e.id === runtime.preferences.engineId)?.capabilities;
 }
 
 function tierSpeaks(): boolean {
@@ -785,8 +784,7 @@ function handleServerFrame(sessionId: string, raw: string): void {
  * original is ducked for as long as the voice is talking.
  */
 function speakLocally(text: string): void {
-  if (!shouldSpeakOnDevice(runtime.preferences.translatedAudioEnabled, tierCapabilities()))
-    return;
+  if (!shouldSpeakOnDevice(runtime.preferences.translatedAudioEnabled, tierCapabilities())) return;
   if (runtime.languageMode.mode === 'bypassed') return; // nothing to translate
   if (!text.trim()) return;
 
@@ -950,6 +948,7 @@ async function handleCommand(request: PanelRequest): Promise<void> {
       return;
 
     case 'GET_STATE':
+    case 'GET_CATALOGUE':
       // Answered directly in the listener so the response channel stays open.
       return;
 
@@ -1063,6 +1062,14 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.kind === 'GET_CATALOGUE') {
+      // Waits on the hydrate rather than replying with whatever is loaded right now: a
+      // panel opened on a cold worker would otherwise get the EMPTY catalogue and paint
+      // two blank language pickers.
+      void catalogueLoaded.finally(() => sendResponse(catalogue()));
+      return true;
+    }
+
     if (message.kind === 'GET_STATE') {
       // Must report rehydrated state, so reply asynchronously. Returning true keeps the
       // response channel open — without it Chrome closes it and the caller hangs.
@@ -1134,14 +1141,18 @@ chrome.runtime.onInstalled.addListener(() => {
  * it once, then lose it". The cached copy in `chrome.storage.local` paints the picker
  * immediately and the network refresh replaces it, so a cold wake is never blank.
  */
-function loadLanguageCatalogue(): void {
-  void hydrateCatalogue(
-    () => api.languages(),
-    {
-      get: (key) => chrome.storage.local.get(key),
-      set: (items) => chrome.storage.local.set(items),
-    },
-  );
+/**
+ * The in-flight hydrate, so `GET_CATALOGUE` answers with a filled catalogue instead of
+ * racing the fetch and handing the panel an empty one.
+ */
+let catalogueLoaded: Promise<void> = Promise.resolve();
+
+function loadLanguageCatalogue(): Promise<void> {
+  catalogueLoaded = hydrateCatalogue(() => api.languages(), {
+    get: (key) => chrome.storage.local.get(key),
+    set: (items) => chrome.storage.local.set(items),
+  });
+  return catalogueLoaded;
 }
 
 chrome.runtime.onInstalled.addListener(loadLanguageCatalogue);
