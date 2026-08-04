@@ -69,6 +69,12 @@ export const DEFAULT_PREFERENCES: ExtensionPreferences = {
 
 export type PanelRequest =
   | { kind: 'GET_STATE' }
+  /**
+   * The language catalogue. The worker owns the fetch and the cache; the panel is a
+   * separate JS realm, so it cannot read the worker's hydrated module state and must ask
+   * for a copy — otherwise both language pickers render zero options.
+   */
+  | { kind: 'GET_CATALOGUE' }
   | { kind: 'LOGIN' }
   | { kind: 'LOGOUT' }
   | { kind: 'REFRESH_ACCOUNT' }

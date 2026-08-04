@@ -33,6 +33,16 @@ export interface Catalogue {
   tiers: Record<string, string[]>;
 }
 
+/**
+ * The read-only slice a picker needs. Stated separately so the side panel can pass a
+ * `readonly()` Vue ref's value — Vue deep-freezes the types, and a `Catalogue` parameter
+ * would reject it.
+ */
+export interface CatalogueView {
+  readonly languages: readonly Language[];
+  readonly tiers: Readonly<Record<string, readonly string[]>>;
+}
+
 const EMPTY: Catalogue = { regions: [], languages: [], tiers: {} };
 const STORAGE_KEY = 'vox.languageCatalogue';
 
@@ -48,6 +58,31 @@ export function setCatalogue(next: Catalogue): void {
   CATALOGUE = next;
 }
 
+/** The whole catalogue, for callers that must ship it to another JS realm. */
+export function catalogue(): Catalogue {
+  return CATALOGUE;
+}
+
+/**
+ * The languages a picker may offer for a given tier.
+ *
+ * Takes the catalogue as an ARGUMENT rather than reading the module global, because the
+ * side panel is a different JS realm from the service worker: its copy of this module is
+ * never hydrated, so a global read there returns an empty list and paints an empty
+ * picker. The panel passes the catalogue it was handed over the message channel.
+ *
+ * A tier the catalogue does not list yields nothing — same rule as an unhydrated
+ * catalogue. Visibly empty beats invisibly wrong.
+ */
+export function selectableLanguages(
+  source: CatalogueView,
+  tier: string | undefined,
+): readonly Language[] {
+  if (tier === undefined) return source.languages;
+  const allowed = new Set(source.tiers[tier] ?? []);
+  return source.languages.filter((l) => allowed.has(l.code));
+}
+
 /**
  * Load the catalogue: cached copy first so the picker paints immediately, then the
  * network to refresh it. A failed fetch leaves whatever the cache had, so going offline
@@ -55,7 +90,10 @@ export function setCatalogue(next: Catalogue): void {
  */
 export async function hydrateCatalogue(
   fetchCatalogue: () => Promise<Catalogue>,
-  storage: { get(key: string): Promise<Record<string, unknown>>; set(items: object): Promise<void> },
+  storage: {
+    get(key: string): Promise<Record<string, unknown>>;
+    set(items: object): Promise<void>;
+  },
 ): Promise<void> {
   try {
     const cached = (await storage.get(STORAGE_KEY))[STORAGE_KEY] as Catalogue | undefined;

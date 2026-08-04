@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
 import { useSession } from './store';
+import type { ExtensionPreferences } from '@/shared/messaging';
 import { buyCreditsUrl } from '@/shared/config';
 import { userMessageFor } from '@/shared/errors';
-import { allLanguages, languagesForTier } from '@/preferences/language';
+import { selectableLanguages } from '@/preferences/language';
 import { estimateRemainingMinutes, formatDuration, formatUsd } from '@/usage/meter';
 
 const session = useSession();
 const state = session.state;
+const catalogue = session.catalogue;
 
 onMounted(async () => {
   await session.init();
@@ -16,6 +18,25 @@ onMounted(async () => {
     if (document.visibilityState === 'visible') session.refreshAccount();
   });
 });
+
+/**
+ * The pickers use `v-model`, not `:value` + `@change`.
+ *
+ * The options arrive asynchronously (the catalogue is served). Replacing a select's
+ * children resets it to the first option, and Vue does not re-apply a `:value` that has
+ * not itself changed — so the control ended up showing a language other than the stored
+ * preference. `v-model` re-applies the selection after every child update.
+ */
+function preference<K extends keyof ExtensionPreferences>(key: K) {
+  return computed({
+    get: () => state.value.preferences[key],
+    set: (value) => session.updatePreferences({ [key]: value } as Partial<ExtensionPreferences>),
+  });
+}
+
+const engineId = preference('engineId');
+const sourceLanguage = preference('sourceLanguage');
+const targetLanguage = preference('targetLanguage');
 
 const isActive = computed(() =>
   ['requesting_capture', 'connecting', 'streaming', 'reconnecting'].includes(state.value.session),
@@ -44,11 +65,9 @@ const needsSourceLanguage = computed(
   () => selectedEngine.value?.capabilities.client_direct === true,
 );
 
-const sourceLanguages = computed(() => {
-  const tier = selectedEngine.value?.tier;
-  const allowed = tier ? new Set(languagesForTier(tier)) : null;
-  return allLanguages().filter((l) => !allowed || allowed.has(l.code));
-});
+const sourceLanguages = computed(() =>
+  selectableLanguages(catalogue.value, selectedEngine.value?.tier),
+);
 
 /** Enhanced cannot start until a spoken language is chosen. */
 const blockedReason = computed(() => {
@@ -63,11 +82,9 @@ const selectedEngine = computed(() =>
 );
 
 /** Only offer languages the selected tier can actually produce. */
-const targetLanguages = computed(() => {
-  const tier = selectedEngine.value?.tier;
-  const allowed = tier ? new Set(languagesForTier(tier)) : null;
-  return allLanguages().filter((l) => !allowed || allowed.has(l.code));
-});
+const targetLanguages = computed(() =>
+  selectableLanguages(catalogue.value, selectedEngine.value?.tier),
+);
 
 /**
  * Whether the SERVER streams the translated voice for this tier.
@@ -165,15 +182,7 @@ function openBuyCredits(): void {
       <section class="card">
         <label class="field">
           <span>Translation tier</span>
-          <select
-            :value="state.preferences.engineId"
-            :disabled="isActive"
-            @change="
-              session.updatePreferences({
-                engineId: ($event.target as HTMLSelectElement).value,
-              })
-            "
-          >
+          <select v-model="engineId" :disabled="isActive">
             <option v-for="engine in usableEngines" :key="engine.id" :value="engine.id">
               {{ engine.display_name }} — ${{ engine.rate_per_minute.toFixed(3) }}/min{{
                 engine.capabilities.translated_audio ? ' · natural voice' : ''
@@ -185,15 +194,7 @@ function openBuyCredits(): void {
 
         <label class="field">
           <span>Spoken language</span>
-          <select
-            :value="state.preferences.sourceLanguage"
-            :disabled="isActive"
-            @change="
-              session.updatePreferences({
-                sourceLanguage: ($event.target as HTMLSelectElement).value,
-              })
-            "
-          >
+          <select v-model="sourceLanguage" :disabled="isActive">
             <option v-if="!needsSourceLanguage" value="auto">Auto detect</option>
             <option v-for="lang in sourceLanguages" :key="lang.code" :value="lang.code">
               {{ lang.flag }} {{ lang.native }}
@@ -207,14 +208,7 @@ function openBuyCredits(): void {
 
         <label class="field">
           <span>Translate into</span>
-          <select
-            :value="state.preferences.targetLanguage"
-            @change="
-              session.updatePreferences({
-                targetLanguage: ($event.target as HTMLSelectElement).value,
-              })
-            "
-          >
+          <select v-model="targetLanguage">
             <option v-for="lang in targetLanguages" :key="lang.code" :value="lang.code">
               {{ lang.flag }} {{ lang.native }}
             </option>

@@ -7,6 +7,7 @@ import {
   languagesForTier,
   normalizeLocale,
   resolveTargetLanguage,
+  selectableLanguages,
   setCatalogue,
   type Catalogue,
 } from '@/preferences/language';
@@ -22,15 +23,36 @@ const LEGACY_8 = ['it', 'en', 'es', 'fr', 'de', 'pt', 'ja', 'zh'];
 const FIXTURE: Catalogue = {
   regions: ['Europe', 'Asia'],
   languages: [
-    { code: 'it', native: 'Italiano', english: 'Italian', region: 'Europe', rtl: false, flag: '🇮🇹' },
+    {
+      code: 'it',
+      native: 'Italiano',
+      english: 'Italian',
+      region: 'Europe',
+      rtl: false,
+      flag: '🇮🇹',
+    },
     { code: 'en', native: 'English', english: 'English', region: 'Europe', rtl: false, flag: '🇬🇧' },
     { code: 'es', native: 'Español', english: 'Spanish', region: 'Europe', rtl: false, flag: '🇪🇸' },
     { code: 'fr', native: 'Français', english: 'French', region: 'Europe', rtl: false, flag: '🇫🇷' },
     { code: 'de', native: 'Deutsch', english: 'German', region: 'Europe', rtl: false, flag: '🇩🇪' },
-    { code: 'pt', native: 'Português', english: 'Portuguese', region: 'Europe', rtl: false, flag: '🇵🇹' },
+    {
+      code: 'pt',
+      native: 'Português',
+      english: 'Portuguese',
+      region: 'Europe',
+      rtl: false,
+      flag: '🇵🇹',
+    },
     { code: 'ja', native: '日本語', english: 'Japanese', region: 'Asia', rtl: false, flag: '🇯🇵' },
     { code: 'zh', native: '中文', english: 'Chinese', region: 'Asia', rtl: false, flag: '🇨🇳' },
-    { code: 'pt-BR', native: 'Português (BR)', english: 'Portuguese (Brazil)', region: 'Europe', rtl: false, flag: '🇧🇷' },
+    {
+      code: 'pt-BR',
+      native: 'Português (BR)',
+      english: 'Portuguese (Brazil)',
+      region: 'Europe',
+      rtl: false,
+      flag: '🇧🇷',
+    },
   ],
   tiers: {
     standard: LEGACY_8,
@@ -75,6 +97,35 @@ describe('catalogue hydration', () => {
     // Offline degrades to slightly stale, never to "no languages at all".
     expect(catalogueReady()).toBe(true);
     expect(isSupported('it')).toBe(true);
+  });
+});
+
+describe('selectableLanguages', () => {
+  const EMPTY: Catalogue = { regions: [], languages: [], tiers: {} };
+
+  it('offers every language when no tier narrows the choice', () => {
+    expect(selectableLanguages(FIXTURE, undefined).map((l) => l.code)).toEqual(
+      FIXTURE.languages.map((l) => l.code),
+    );
+  });
+
+  it('offers only what the selected tier can produce', () => {
+    const codes = selectableLanguages(FIXTURE, 'standard').map((l) => l.code);
+    expect(codes).toEqual(LEGACY_8);
+    expect(codes).not.toContain('pt-BR');
+    expect(selectableLanguages(FIXTURE, 'premium').map((l) => l.code)).toContain('pt-BR');
+  });
+
+  it('reads the catalogue it is given, not module state', () => {
+    // The side panel is a different JS realm from the worker: its module copy of the
+    // catalogue is EMPTY, which is exactly how both language pickers came up blank.
+    setCatalogue(EMPTY);
+    expect(selectableLanguages(FIXTURE, 'standard')).toHaveLength(LEGACY_8.length);
+  });
+
+  it('offers nothing for a tier the catalogue does not list, rather than guessing', () => {
+    expect(selectableLanguages(FIXTURE, 'nope')).toEqual([]);
+    expect(selectableLanguages(EMPTY, 'standard')).toEqual([]);
   });
 });
 
