@@ -26,7 +26,7 @@ export default defineConfig(({ mode }) => {
   // Origins are configuration, never hard-coded literals in source. `.env.example`
   // documents them; production values come from `.env.production`.
   const apiOrigin = process.env.VITE_API_ORIGIN ?? 'https://api.voxtranslate.app';
-  const appOrigin = process.env.VITE_APP_ORIGIN ?? 'https://voxtranslate.app';
+  const appOrigin = process.env.VITE_APP_ORIGIN ?? 'https://app.voxtranslate.app';
 
   return {
     plugins: [vue(), manifestPlugin({ apiOrigin, appOrigin, dev })],

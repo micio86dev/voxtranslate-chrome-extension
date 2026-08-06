@@ -1,6 +1,6 @@
 {
   "name": "voxtranslate-chrome-extension",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "VoxTranslate for Chrome \u2014 real-time translated subtitles over any tab audio.",
   "license": "MIT",
