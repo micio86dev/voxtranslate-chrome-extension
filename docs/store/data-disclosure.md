@@ -40,3 +40,12 @@ processing as the VoxTranslate web application and is covered by the
 ## Privacy policy URL
 
 `https://voxtranslate.app/privacy` (extension-specific notice: `PRIVACY.md` in this repo).
+
+## Support URL
+
+`https://voxtranslate.app/contact`
+
+Verify this resolves before every submission. It returned 404 on both the apex and the app
+host until 2026-08-26, while both this file and `PRIVACY.md` printed it as the place to ask
+questions — so anyone who followed the privacy notice hit a dead page. It now 301s to the
+business page, which carries the site's contact form.
