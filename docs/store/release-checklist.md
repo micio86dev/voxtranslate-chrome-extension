@@ -31,7 +31,12 @@ The script refuses to package if any manifest-declared file is missing.
 
 ## Store listing
 
-- [ ] Name, short description, detailed description reviewed.
+Copy lives in `docs/store/listing.md` — paste from there rather than rewriting it in the
+dashboard, so the wording that was checked against the rules below is the wording that
+ships.
+
+- [ ] Name, short description, detailed description pasted from `docs/store/listing.md`.
+- [ ] Support URL resolves (it 404'd for a period in August 2026 — check, do not assume).
 - [ ] Screenshots current (1280×800 or 640×400).
 - [ ] Icon 128×128 present.
 - [ ] Permission justifications pasted from `docs/store/permissions.md`.
