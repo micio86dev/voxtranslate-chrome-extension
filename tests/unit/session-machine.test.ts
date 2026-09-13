@@ -6,6 +6,7 @@ import {
   isStreaming,
   transition,
   type SessionContext,
+  type SessionState,
 } from '@/state/session-machine';
 
 /** Drive the machine through a list of events, asserting each one was accepted. */
@@ -203,5 +204,165 @@ describe('capture gesture requirement', () => {
     const retried = transition(denied, { type: 'START_REQUESTED' }, 's2');
     expect(retried.accepted).toBe(true);
     expect(retried.context.state).toBe('requesting_capture');
+  });
+});
+
+describe('authentication states', () => {
+  it('moves into authenticating when an interactive login begins', () => {
+    const result = transition(initialContext(false), { type: 'LOGIN_STARTED' });
+    expect(result.accepted).toBe(true);
+    expect(result.context.state).toBe('authenticating');
+  });
+
+  it('returns to logged_out with the reason when login fails', () => {
+    const authenticating = transition(initialContext(false), { type: 'LOGIN_STARTED' }).context;
+    const result = transition(authenticating, { type: 'LOGIN_FAILED', reason: 'user cancelled' });
+    expect(result.context.state).toBe('logged_out');
+    expect(result.context.error).toBe('user cancelled');
+  });
+
+  it('clears a previous error once login succeeds', () => {
+    const failed = transition(initialContext(false), {
+      type: 'FATAL',
+      reason: 'boom',
+    }).context;
+    const authenticating = transition(failed, { type: 'LOGIN_STARTED' }).context;
+    const ready = transition(authenticating, { type: 'LOGIN_SUCCEEDED' }).context;
+    expect(ready.state).toBe('ready');
+    expect(ready.error).toBeNull();
+  });
+
+  it('ignores a start request while still logged out', () => {
+    const result = transition(initialContext(false), { type: 'START_REQUESTED' }, 's1');
+    expect(result.accepted).toBe(false);
+    expect(result.context.state).toBe('logged_out');
+  });
+
+  it('ignores session events while authenticating', () => {
+    const authenticating = transition(initialContext(false), { type: 'LOGIN_STARTED' }).context;
+    expect(transition(authenticating, { type: 'SOCKET_OPEN' }).accepted).toBe(false);
+    expect(transition(authenticating, { type: 'START_REQUESTED' }, 's1').accepted).toBe(false);
+  });
+
+  it('lets a signed-in user re-authenticate from an idle state', () => {
+    const result = transition(initialContext(true), { type: 'LOGIN_STARTED' });
+    expect(result.context.state).toBe('authenticating');
+  });
+});
+
+describe('stopping a session before it is live', () => {
+  it('accepts a stop while capture permission is still pending', () => {
+    const requesting = transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context;
+    const result = transition(requesting, { type: 'STOP_REQUESTED' });
+    expect(result.accepted).toBe(true);
+    expect(result.context.state).toBe('stopping');
+  });
+
+  it('accepts a stop while the socket is still connecting', () => {
+    const connecting = transition(
+      transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context,
+      { type: 'CAPTURE_GRANTED' },
+    ).context;
+    expect(transition(connecting, { type: 'STOP_REQUESTED' }).context.state).toBe('stopping');
+  });
+
+  it('tears down rather than warning when credits run out mid-connect', () => {
+    const connecting = transition(
+      transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context,
+      { type: 'CAPTURE_GRANTED' },
+    ).context;
+    expect(transition(connecting, { type: 'CREDITS_EXHAUSTED' }).context.state).toBe('stopping');
+  });
+
+  it('ignores an out-of-order event while requesting capture', () => {
+    const requesting = transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context;
+    expect(transition(requesting, { type: 'SOCKET_OPEN' }).accepted).toBe(false);
+  });
+
+  it('ignores an out-of-order event while connecting', () => {
+    const connecting = transition(
+      transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context,
+      { type: 'CAPTURE_GRANTED' },
+    ).context;
+    expect(transition(connecting, { type: 'CAPTURE_GRANTED' }).accepted).toBe(false);
+  });
+});
+
+describe('reconnecting', () => {
+  /** Drive a session to `reconnecting` after a recoverable drop. */
+  function reconnecting() {
+    let ctx = transition(initialContext(true), { type: 'START_REQUESTED' }, 's1').context;
+    ctx = transition(ctx, { type: 'CAPTURE_GRANTED' }).context;
+    ctx = transition(ctx, { type: 'SOCKET_OPEN' }).context;
+    return transition(ctx, { type: 'SOCKET_CLOSED', recoverable: true }).context;
+  }
+
+  it('returns to streaming when the socket comes back', () => {
+    expect(transition(reconnecting(), { type: 'RECONNECT_SUCCEEDED' }).context.state).toBe(
+      'streaming',
+    );
+  });
+
+  it('accepts a user stop mid-reconnect', () => {
+    expect(transition(reconnecting(), { type: 'STOP_REQUESTED' }).context.state).toBe('stopping');
+  });
+
+  it('tears down when credits run out mid-reconnect', () => {
+    expect(transition(reconnecting(), { type: 'CREDITS_EXHAUSTED' }).context.state).toBe(
+      'stopping',
+    );
+  });
+
+  it('ignores an irrelevant event mid-reconnect', () => {
+    expect(transition(reconnecting(), { type: 'CAPTURE_GRANTED' }).accepted).toBe(false);
+  });
+
+  it('keeps the session id while reconnecting, so its frames stay accepted', () => {
+    const ctx = reconnecting();
+    expect(ctx.sessionId).toBe('s1');
+    expect(acceptsEventFrom(ctx, 's1')).toBe(true);
+  });
+});
+
+describe('resource and streaming predicates', () => {
+  function at(state: SessionState): SessionContext {
+    return { state, sessionId: 's1', error: null };
+  }
+
+  it('reports streaming only in the streaming state', () => {
+    expect(isStreaming(at('streaming'))).toBe(true);
+    for (const state of ['ready', 'connecting', 'reconnecting', 'stopping'] as SessionState[]) {
+      expect(isStreaming(at(state))).toBe(false);
+    }
+  });
+
+  it('reports held resources for every state with a live pipeline', () => {
+    for (const state of [
+      'requesting_capture',
+      'connecting',
+      'streaming',
+      'reconnecting',
+      'stopping',
+    ] as SessionState[]) {
+      expect(holdsResources(at(state))).toBe(true);
+    }
+  });
+
+  it('reports no held resources once the session is over', () => {
+    for (const state of [
+      'logged_out',
+      'authenticating',
+      'ready',
+      'stopped',
+      'error',
+      'credits_exhausted',
+    ] as SessionState[]) {
+      expect(holdsResources(at(state))).toBe(false);
+    }
+  });
+
+  it('never accepts an event for a session that has no id', () => {
+    expect(acceptsEventFrom({ state: 'ready', sessionId: null, error: null }, null)).toBe(false);
+    expect(acceptsEventFrom({ state: 'ready', sessionId: null, error: null }, 's1')).toBe(false);
   });
 });

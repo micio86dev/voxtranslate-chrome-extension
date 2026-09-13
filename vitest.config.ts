@@ -22,6 +22,12 @@ export default defineConfig({
       // Chrome-adapter layers are covered by e2e/manual testing, not unit tests —
       // mocking the whole extension API surface would test the mock, not the code.
       exclude: ['src/**/*.d.ts', 'src/sidepanel/**', 'src/background/**', 'src/offscreen/**'],
+      reporter: ['text', 'json-summary'],
+      reportsDirectory: './coverage-unit',
+      // The same bar the app's client and dashboard hold. `all` (the vitest default)
+      // reports untouched files too, so a new untested module shows up as a gap
+      // instead of quietly leaving the average alone.
+      thresholds: { lines: 85, functions: 85 },
     },
   },
 });
